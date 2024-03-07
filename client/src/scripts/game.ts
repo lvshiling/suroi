@@ -3,12 +3,13 @@ import $ from "jquery";
 import { Application, Color } from "pixi.js";
 import { GameConstants, InputActions, ObjectCategory, PacketType } from "../../../common/src/constants";
 import { ArmorType } from "../../../common/src/definitions/armors";
+import { Badges, type BadgeDefinition } from "../../../common/src/definitions/badges";
 import { Emotes } from "../../../common/src/definitions/emotes";
 import { Loots, type LootDefinition } from "../../../common/src/definitions/loots";
 import { Scopes } from "../../../common/src/definitions/scopes";
 import { GameOverPacket } from "../../../common/src/packets/gameOverPacket";
-import { JoinedPacket } from "../../../common/src/packets/joinedPacket";
 import { JoinPacket } from "../../../common/src/packets/joinPacket";
+import { JoinedPacket } from "../../../common/src/packets/joinedPacket";
 import { MapPacket } from "../../../common/src/packets/mapPacket";
 import { type Packet } from "../../../common/src/packets/packet";
 import { PickupPacket } from "../../../common/src/packets/pickupPacket";
@@ -85,7 +86,12 @@ export class Game {
     readonly bullets = new Set<Bullet>();
     readonly planes = new Set<Plane>();
 
-    readonly playerNames = new Map<number, { readonly name: string, readonly hasColor: boolean, readonly nameColor: Color }>();
+    readonly playerNames = new Map<number, {
+        readonly name: string
+        readonly hasColor: boolean
+        readonly nameColor: Color
+        readonly badge?: BadgeDefinition
+    }>();
 
     activePlayerID = -1;
     get activePlayer(): Player | undefined {
@@ -199,7 +205,12 @@ export class Game {
             joinPacket.name = this.console.getBuiltInCVar("cv_player_name");
             joinPacket.skin = Loots.fromString(this.console.getBuiltInCVar("cv_loadout_skin"));
 
-            for (const emote of ["top", "right", "bottom", "left"] as const) {
+            const badge = this.console.getBuiltInCVar("cv_loadout_badge");
+            if (badge) {
+                joinPacket.badge = Badges.fromString(badge);
+            }
+
+            for (const emote of ["top", "right", "bottom", "left", "death", "win"] as const) {
                 joinPacket.emotes.push(Emotes.fromString(this.console.getBuiltInCVar(`cv_loadout_${emote}_emote`)));
             }
 
@@ -364,6 +375,7 @@ export class Game {
         this.camera.container.removeChildren();
         this.particleManager.clear();
         this.map.gasGraphics.clear();
+        this.map.pingGraphics.clear();
         this.map.pings.clear();
         this.map.pingsContainer.removeChildren();
         this.playerNames.clear();
@@ -451,7 +463,8 @@ export class Game {
             this.playerNames.set(newPlayer.id, {
                 name: newPlayer.name,
                 hasColor: newPlayer.hasColor,
-                nameColor: new Color(newPlayer.nameColor)
+                nameColor: new Color(newPlayer.nameColor),
+                badge: newPlayer.loadout.badge
             });
         }
 
@@ -655,7 +668,7 @@ export class Game {
                     (
                         this.inputManager.isMobile
                             // Only show interact message on mobile if object needs to be tapped to pick up
-                            ? ((object instanceof Loot && (type === ItemType.Gun || type === ItemType.Melee || type === ItemType.Skin)) || object instanceof Obstacle)
+                            ? (object instanceof Loot || object instanceof Obstacle)
                             : object !== undefined
                     ) ||
                     isAction
