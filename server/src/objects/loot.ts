@@ -16,6 +16,8 @@ import { type Player } from "./player";
 
 export class Loot extends BaseGameObject<ObjectCategory.Loot> {
     override readonly type = ObjectCategory.Loot;
+    override readonly fullAllocBytes = 8;
+    override readonly partialAllocBytes = 4;
 
     declare readonly hitbox: CircleHitbox;
 
@@ -51,7 +53,10 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
 
         this.push(randomRotation(), 0.003);
 
-        this.game.addTimeout(() => { this.isNew = false; }, 100);
+        this.game.addTimeout(() => {
+            this.isNew = false;
+            this.setDirty();
+        }, 100);
     }
 
     update(): void {
@@ -130,7 +135,7 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
         }
 
         if (!Vec.equals(this._oldPosition, this.position)) {
-            this.game.partialDirtyObjects.add(this);
+            this.setPartialDirty();
             this.game.grid.updateObject(this);
         }
     }
@@ -140,10 +145,11 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
     }
 
     canInteract(player: Player): boolean {
-        if (this.dead) return false;
+        if (this.dead || player.downed) return false;
         const inventory = player.inventory;
+        const definition = this.definition;
 
-        switch (this.definition.itemType) {
+        switch (definition.itemType) {
             case ItemType.Gun: {
                 for (const slot of inventory.weapons) {
                     const weapon = slot;
@@ -152,7 +158,7 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                         weapon instanceof GunItem &&
                         !weapon.definition.isDual &&
                         weapon.definition.dualVariant &&
-                        weapon.definition === this.definition
+                        weapon.definition === definition
                     ) {
                         return true;
                     }
@@ -160,21 +166,21 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
 
                 return !inventory.hasWeapon(0) ||
                     !inventory.hasWeapon(1) ||
-                    (inventory.activeWeaponIndex < 2 && this.definition !== inventory.activeWeapon.definition);
+                    (inventory.activeWeaponIndex < 2 && definition !== inventory.activeWeapon.definition);
             }
             case ItemType.Healing:
             case ItemType.Ammo:
             case ItemType.Throwable: {
-                const idString = this.definition.idString;
+                const idString = definition.idString;
 
                 return inventory.items.getItem(idString) + 1 <= (inventory.backpack?.maxCapacity[idString] ?? 0);
             }
             case ItemType.Melee: {
-                return this.definition !== inventory.getWeapon(2)?.definition;
+                return definition !== inventory.getWeapon(2)?.definition;
             }
             case ItemType.Armor: {
                 let threshold = -Infinity;
-                switch (this.definition.armorType) {
+                switch (definition.armorType) {
                     case ArmorType.Helmet: {
                         threshold = inventory.helmet?.level ?? 0;
                         break;
@@ -185,13 +191,13 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                     }
                 }
 
-                return this.definition.level > threshold;
+                return definition.level > threshold;
             }
             case ItemType.Backpack: {
-                return this.definition.level > (inventory.backpack?.level ?? 0);
+                return definition.level > (inventory.backpack?.level ?? 0);
             }
             case ItemType.Scope: {
-                return !inventory.items.hasItem(this.definition.idString);
+                return !inventory.items.hasItem(definition.idString);
             }
             case ItemType.Skin: {
                 return true;
@@ -245,7 +251,7 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                         weapon.definition === definition
                     ) {
                         player.dirty.weapons = true;
-                        player.game.fullDirtyObjects.add(player);
+                        player.setDirty();
 
                         const wasReloading = player.action?.type === PlayerActions.Reload;
                         if (wasReloading) {
@@ -309,7 +315,7 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                         } else /* if (currentCount + this.count > maxCapacity) */ {
                             inventory.items.setItem(idString, maxCapacity);
                             countToRemove = maxCapacity - currentCount;
-                            this.game.fullDirtyObjects.add(this);
+                            this.setDirty();
                         }
                     }
                 };
@@ -343,14 +349,14 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                         player.inventory.vest = definition;
                 }
 
-                this.game.fullDirtyObjects.add(player);
+                player.setDirty();
                 break;
             }
             case ItemType.Backpack: {
                 if ((player.inventory.backpack?.level ?? 0) > 0) createNewItem(player.inventory.backpack);
                 player.inventory.backpack = definition;
 
-                this.game.fullDirtyObjects.add(player);
+                player.setDirty();
                 break;
             }
             case ItemType.Scope: {
@@ -366,7 +372,7 @@ export class Loot extends BaseGameObject<ObjectCategory.Loot> {
                 createNewItem(player.loadout.skin);
                 player.loadout.skin = definition;
 
-                this.game.fullDirtyObjects.add(player);
+                player.setDirty();
                 break;
             }
         }

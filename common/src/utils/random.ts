@@ -58,12 +58,13 @@ export function randomRotation(): number {
 /**
  * Generate a random point inside of a circle.
  * @param position The center of the circle.
- * @param radius The radius of the circle.
- * A vector representation of the randomized point.
+ * @param maxRadius The maximum radius of the circle.
+ * @param minRadius The minimum radius of the circle. Defaults to 0.
+ * @returns A vector representation of the randomized point.
  */
-export function randomPointInsideCircle(position: Vector, radius: number): Vector {
+export function randomPointInsideCircle(position: Vector, maxRadius: number, minRadius?: number): Vector {
     const angle = randomFloat(0, Math.PI * 2);
-    const length = randomFloat(0, radius);
+    const length = randomFloat(minRadius ?? 0, maxRadius);
     return {
         x: position.x + (Math.cos(angle) * length),
         y: position.y + (Math.sin(angle) * length)
@@ -75,7 +76,7 @@ export function randomPointInsideCircle(position: Vector, radius: number): Vecto
  * @param items The elements to choose from.
  * @param weights A legend of the elements' relative weights.
  */
-export function weightedRandom<T>(items: T[], weights: number[]): T {
+export function weightedRandom<T>(items: readonly T[], weights: number[]): T {
     let i: number;
     for (i = 1; i < weights.length; i++) weights[i] += weights[i - 1];
 
@@ -84,7 +85,7 @@ export function weightedRandom<T>(items: T[], weights: number[]): T {
     return items[i];
 }
 
-export function pickRandomInArray<T>(items: T[]): T {
+export function pickRandomInArray<T>(items: readonly T[]): T {
     return items[Math.floor(Math.random() * items.length)];
 }
 

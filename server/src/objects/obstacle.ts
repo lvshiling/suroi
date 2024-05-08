@@ -21,6 +21,8 @@ import { type Player } from "./player";
 
 export class Obstacle extends BaseGameObject<ObjectCategory.Obstacle> {
     override readonly type = ObjectCategory.Obstacle;
+    override readonly fullAllocBytes = 8;
+    override readonly partialAllocBytes = 4;
     override readonly damageable = true;
 
     health: number;
@@ -161,7 +163,7 @@ export class Obstacle extends BaseGameObject<ObjectCategory.Obstacle> {
         }
 
         this.health -= amount;
-        this.game.partialDirtyObjects.add(this);
+        this.setPartialDirty();
 
         if (this.health <= 0 || this.dead) {
             this.health = 0;
@@ -271,7 +273,7 @@ export class Obstacle extends BaseGameObject<ObjectCategory.Obstacle> {
                     this.game.addTimeout(() => {
                         this.dead = true;
                         this.collidable = false;
-                        this.game.fullDirtyObjects.add(this);
+                        this.setDirty();
 
                         this.game.map.generateObstacle(
                             getRandomIDString(replaceWith.idString),
@@ -283,8 +285,7 @@ export class Obstacle extends BaseGameObject<ObjectCategory.Obstacle> {
                 break;
             }
         }
-
-        this.game.fullDirtyObjects.add(this);
+        this.setDirty();
     }
 
     toggleDoor(player?: Player): void {

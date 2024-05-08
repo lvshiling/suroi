@@ -43,7 +43,9 @@ interface InternalAnimation<T> {
 }
 
 export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle> {
-    readonly type = ObjectCategory.SyncedParticle;
+    override readonly type = ObjectCategory.SyncedParticle;
+    override readonly fullAllocBytes = 16;
+    override readonly partialAllocBytes = 8;
 
     alpha: number;
     alphaActive = false;
@@ -80,7 +82,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
         this._creationDate = game.now;
         this.definition = definition;
 
-        this._lifetime = resolveNumericSpecifier(definition.lifetime ?? Infinity);
+        this._lifetime = resolveNumericSpecifier(definition.lifetime);
 
         const resolveDuration = (duration: Animated<unknown>["duration"]): number => duration === "lifetime" || duration === undefined
             ? this._lifetime
@@ -100,7 +102,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
             this.alpha = Numeric.lerp(this._alphaAnim.start, this._alphaAnim.end, easingFn(0));
             this.alphaActive = true;
         } else {
-            this.alpha = resolveNumericSpecifier(alpha ?? 1);
+            this.alpha = resolveNumericSpecifier(alpha);
         }
 
         if (typeof scale === "object" && "start" in scale) {
@@ -115,10 +117,10 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
             this.scale = Numeric.lerp(this._scaleAnim.start, this._scaleAnim.end, easingFn(0));
             this.scaleActive = true;
         } else {
-            this.scale = resolveNumericSpecifier(scale ?? 1);
+            this.scale = resolveNumericSpecifier(scale);
         }
 
-        this.angularVelocity = resolveNumericSpecifier(definition.angularVelocity ?? 0);
+        this.angularVelocity = resolveNumericSpecifier(definition.angularVelocity);
 
         if (typeof velocity === "object" && "start" in velocity) {
             const easingFn = EaseFunctions[velocity.easing ?? "linear"];
@@ -131,7 +133,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
 
             this._velocity = Vec.lerp(this._velocityAnim.start, this._velocityAnim.end, easingFn(0));
         } else {
-            this._velocity = resolveVectorSpecifier(velocity ?? Vec.create(0, 0));
+            this._velocity = resolveVectorSpecifier(velocity);
         }
 
         if (definition.variations !== undefined) {
@@ -143,7 +145,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
         }
     }
 
-    override damage(amount: number, source?: unknown): void {}
+    override damage(_amount: number, _source?: unknown): void {}
 
     setTarget(target: Vector, timespan: number, easing: EasingFunction): void {
         this._target = {
@@ -166,7 +168,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
             return;
         }
 
-        this.game.partialDirtyObjects.add(this);
+        this.setPartialDirty();
 
         const dt = GameConstants.msPerTick;
 
@@ -220,6 +222,7 @@ export class SyncedParticle extends BaseGameObject<ObjectCategory.SyncedParticle
         if (this.hitbox instanceof CircleHitbox && this.definition.hitbox !== undefined) {
             this.hitbox.position = this.position;
             this.hitbox.radius = this.definition.hitbox.radius * this.scale;
+            this.game.grid.updateObject(this);
         }
     }
 

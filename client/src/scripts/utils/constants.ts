@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/indent */
 import { Color } from "pixi.js";
 import { Modes, type ColorKeys } from "../../../../common/src/definitions/modes";
 import { Config } from "../config";
@@ -32,9 +31,18 @@ export const COLORS = (Object.keys(MODE.colors) as ColorKeys[])
 
 export const GHILLIE_TINT = COLORS.grass.multiply(new Color("hsl(0, 0%, 99%)"));
 
+export const TEAMMATE_COLORS = [
+    new Color("#00ffff"),
+    new Color("#ff00ff"),
+    new Color("#ffff00"),
+    new Color("#ff8000")
+];
+
 export const PIXI_SCALE = 20;
 
 export const FIRST_EMOTE_ANGLE = Math.atan2(-1, -1);
 export const SECOND_EMOTE_ANGLE = Math.atan2(1, 1);
 export const THIRD_EMOTE_ANGLE = Math.atan2(-1, 1);
 export const FOURTH_EMOTE_ANGLE = Math.atan2(1, -1);
+
+export const emoteSlots = ["top", "right", "bottom", "left", "win", "death"] as const;

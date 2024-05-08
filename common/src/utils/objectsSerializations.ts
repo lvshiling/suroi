@@ -5,7 +5,7 @@ import { Buildings, type BuildingDefinition } from "../definitions/buildings";
 import { Decals, type DecalDefinition } from "../definitions/decals";
 import { type HealingItemDefinition } from "../definitions/healingItems";
 import { Loots, type LootDefinition, type WeaponDefinition } from "../definitions/loots";
-import { Obstacles, RotationMode, type ObstacleDefinition } from "../definitions/obstacles";
+import { Obstacles, type ObstacleDefinition } from "../definitions/obstacles";
 import { Skins, type SkinDefinition } from "../definitions/skins";
 import { SyncedParticles, type SyncedParticleDefinition } from "../definitions/syncedParticles";
 import { type ThrowableDefinition } from "../definitions/throwables";
@@ -27,6 +27,8 @@ type BaseObjectsNetData = {
 
 export type FullData<Cat extends ObjectCategory> = ObjectsNetData[Cat] & (ObjectsNetData[Cat] extends Fullable<infer S> ? { full: S } : object);
 
+type FullDeserializationType<T extends ObjectCategory> = ObjectsNetData[T] extends { full?: infer Full } ? NonNullable<Full> : undefined;
+
 export interface ObjectsNetData extends BaseObjectsNetData {
     //
     // Player Data
@@ -44,6 +46,9 @@ export interface ObjectsNetData extends BaseObjectsNetData {
         })
         full?: {
             dead: boolean
+            downed: boolean
+            beingRevived: boolean
+            teamID: number
             invulnerable: boolean
             activeItem: WeaponDefinition
             skin: SkinDefinition
@@ -153,7 +158,7 @@ interface ObjectSerialization<T extends ObjectCategory> {
     serializePartial: (stream: SuroiBitStream, data: ObjectsNetData[T]) => void
     serializeFull: (stream: SuroiBitStream, data: FullData<T>) => void
     deserializePartial: (stream: SuroiBitStream) => ObjectsNetData[T]
-    deserializeFull: (stream: SuroiBitStream) => FullData<T>
+    deserializeFull: (stream: SuroiBitStream) => FullDeserializationType<T>
 }
 
 export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<K> } = {
@@ -182,10 +187,11 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             }
         },
         serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
-
             const full = data.full;
             stream.writeBoolean(full.dead);
+            stream.writeBoolean(full.downed);
+            stream.writeBoolean(full.beingRevived);
+            stream.writeUint8(full.teamID);
             stream.writeBoolean(full.invulnerable);
             Loots.writeToStream(stream, full.activeItem);
             Skins.writeToStream(stream, full.skin);
@@ -223,10 +229,11 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             return data;
         },
         deserializeFull(stream) {
-            const partial = this.deserializePartial(stream);
-
-            const full: ObjectsNetData[ObjectCategory.Player]["full"] = {
+            const data: ObjectsNetData[ObjectCategory.Player]["full"] = {
                 dead: stream.readBoolean(),
+                downed: stream.readBoolean(),
+                beingRevived: stream.readBoolean(),
+                teamID: stream.readUint8(),
                 invulnerable: stream.readBoolean(),
                 activeItem: Loots.readFromStream(stream),
                 skin: Skins.readFromStream(stream),
@@ -234,17 +241,14 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             };
 
             if (stream.readBoolean()) {
-                full.helmet = Armors.readFromStream<ArmorDefinition>(stream);
+                data.helmet = Armors.readFromStream<ArmorDefinition>(stream);
             }
 
             if (stream.readBoolean()) {
-                full.vest = Armors.readFromStream<ArmorDefinition>(stream);
+                data.vest = Armors.readFromStream<ArmorDefinition>(stream);
             }
 
-            return {
-                ...partial,
-                full
-            };
+            return data;
         }
     },
     //
@@ -256,7 +260,6 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             stream.writeBoolean(data.dead);
         },
         serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
             const full = data.full;
             Obstacles.writeToStream(stream, full.definition);
 
@@ -279,11 +282,9 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             return data;
         },
         deserializeFull(stream) {
-            const partial = this.deserializePartial(stream);
-
             const definition = Obstacles.readFromStream(stream);
 
-            const full: ObjectsNetData[ObjectCategory.Obstacle]["full"] = {
+            const data: ObjectsNetData[ObjectCategory.Obstacle]["full"] = {
                 definition,
                 position: stream.readPosition(),
                 rotation: stream.readObstacleRotation(definition.rotationMode),
@@ -291,13 +292,11 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             };
 
             if (definition.role === ObstacleSpecialRoles.Door) {
-                full.door = { offset: stream.readBits(2) };
+                data.door = { offset: stream.readBits(2) };
             } else if (definition.role === ObstacleSpecialRoles.Activatable) {
-                full.activated = stream.readBoolean();
+                data.activated = stream.readBoolean();
             }
-            return {
-                ...partial, full
-            };
+            return data;
         }
     },
     //
@@ -308,7 +307,6 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             stream.writePosition(data.position);
         },
         serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
             Loots.writeToStream(stream, data.full.definition);
             stream.writeBits(data.full.count, 9);
             stream.writeBoolean(data.full.isNew);
@@ -320,12 +318,9 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         },
         deserializeFull(stream) {
             return {
-                ...this.deserializePartial(stream),
-                full: {
-                    definition: Loots.readFromStream(stream),
-                    count: stream.readBits(9),
-                    isNew: stream.readBoolean()
-                }
+                definition: Loots.readFromStream(stream),
+                count: stream.readBits(9),
+                isNew: stream.readBoolean()
             };
         }
     },
@@ -338,9 +333,7 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             stream.writeBoolean(data.isNew);
             stream.writeObjectID(data.playerID);
         },
-        serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
-        },
+        serializeFull(): void { },
         deserializePartial(stream) {
             const position = stream.readPosition();
             const isNew = stream.readBoolean();
@@ -352,9 +345,7 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
                 playerID
             };
         },
-        deserializeFull(stream) {
-            return this.deserializePartial(stream);
-        }
+        deserializeFull() { }
     },
     //
     // Building Serialization
@@ -369,7 +360,6 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             }
         },
         serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
             Buildings.writeToStream(stream, data.full.definition);
             stream.writePosition(data.full.position);
             stream.writeBits(data.full.rotation, 2);
@@ -387,12 +377,10 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         },
         deserializeFull(stream) {
             return {
-                ...this.deserializePartial(stream),
-                full: {
-                    definition: Buildings.readFromStream(stream),
-                    position: stream.readPosition(),
-                    rotation: stream.readBits(2) as Orientation
-                }
+                definition: Buildings.readFromStream(stream),
+                position: stream.readPosition(),
+                rotation: stream.readBits(2) as Orientation
+
             };
         }
     },
@@ -403,29 +391,24 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         serializePartial(stream, data): void {
             Decals.writeToStream(stream, data.definition);
             stream.writePosition(data.position);
-            stream.writeObstacleRotation(data.rotation, data.definition.rotationMode ?? RotationMode.Limited);
+            stream.writeObstacleRotation(data.rotation, data.definition.rotationMode);
         },
-        serializeFull(stream, data): void {
-            this.serializePartial(stream, data);
-        },
+        serializeFull(): void { },
         deserializePartial(stream) {
             const definition = Decals.readFromStream(stream);
             return {
                 definition,
                 position: stream.readPosition(),
-                rotation: stream.readObstacleRotation(definition.rotationMode ?? RotationMode.Limited).rotation
+                rotation: stream.readObstacleRotation(definition.rotationMode).rotation
             };
         },
-        deserializeFull(stream) {
-            return this.deserializePartial(stream);
-        }
+        deserializeFull() { }
     },
     [ObjectCategory.Parachute]: {
         serializePartial(stream, data) {
             stream.writeFloat(data.height, 0, 1, 8);
         },
         serializeFull(stream, data) {
-            this.serializePartial(stream, data);
             stream.writePosition(data.full.position);
         },
         deserializePartial(stream) {
@@ -435,10 +418,9 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         },
         deserializeFull(stream) {
             return {
-                ...this.deserializePartial(stream),
-                full: {
-                    position: stream.readPosition()
-                }
+
+                position: stream.readPosition()
+
             };
         }
     },
@@ -449,7 +431,6 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             stream.writeBoolean(data.airborne);
         },
         serializeFull(stream, data) {
-            this.serializePartial(stream, data);
             Loots.writeToStream(stream, data.full.definition);
         },
         deserializePartial(stream) {
@@ -461,10 +442,8 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         },
         deserializeFull(stream) {
             return {
-                ...this.deserializePartial(stream),
-                full: {
-                    definition: Loots.readFromStream(stream)
-                }
+                definition: Loots.readFromStream(stream)
+
             };
         }
     },
@@ -486,7 +465,6 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
             }
         },
         serializeFull(stream, data) {
-            this.serializePartial(stream, data);
             const full = data.full;
             SyncedParticles.writeToStream(stream, full.definition);
 
@@ -514,11 +492,8 @@ export const ObjectSerializations: { [K in ObjectCategory]: ObjectSerialization<
         },
         deserializeFull(stream) {
             return {
-                ...this.deserializePartial(stream),
-                full: {
-                    definition: SyncedParticles.readFromStream(stream),
-                    variant: stream.readBoolean() ? stream.readVariation() : undefined
-                }
+                definition: SyncedParticles.readFromStream(stream),
+                variant: stream.readBoolean() ? stream.readVariation() : undefined
             };
         }
     }

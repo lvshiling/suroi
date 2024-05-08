@@ -1,14 +1,17 @@
-import { DEFAULT_INVENTORY, GameConstants, KillFeedMessageType, KillType, PacketType, type GasState, type ObjectCategory } from "../constants";
+import { DEFAULT_INVENTORY, GameConstants, KillfeedEventSeverity, KillfeedEventType, KillfeedMessageType, PacketType, type GasState, type ObjectCategory } from "../constants";
 import { Badges, type BadgeDefinition } from "../definitions/badges";
 import { Emotes, type EmoteDefinition } from "../definitions/emotes";
 import { Explosions, type ExplosionDefinition } from "../definitions/explosions";
 import { Loots, type LootDefinition, type WeaponDefinition } from "../definitions/loots";
 import { Scopes, type ScopeDefinition } from "../definitions/scopes";
 import { BaseBullet, type BulletOptions } from "../utils/baseBullet";
+import { ObjectDefinitions } from "../utils/objectDefinitions";
 import { ObjectSerializations, type FullData, type ObjectsNetData } from "../utils/objectsSerializations";
-import { calculateEnumPacketBits, type SuroiBitStream } from "../utils/suroiBitStream";
-import { type Vector } from "../utils/vector";
-import { Packet } from "./packet";
+import { calculateEnumPacketBits, OBJECT_ID_BITS, type SuroiBitStream } from "../utils/suroiBitStream";
+import { Vec, type Vector } from "../utils/vector";
+
+import { MapPings, type MapPingDefinition } from "../definitions/mapPings";
+import { AbstractPacket } from "./packet";
 
 interface ObjectFullData {
     readonly id: number
@@ -30,6 +33,7 @@ export interface PlayerData {
         weapons: boolean
         items: boolean
         id: boolean
+        teammates: boolean
         zoom: boolean
         throwable: boolean
     }
@@ -37,8 +41,16 @@ export interface PlayerData {
     id: number
     spectating: boolean
 
-    health: number
-    adrenaline: number
+    teammates: Array<{
+        id: number
+        position: Vector
+        normalizedHealth: number
+        downed: boolean
+        disconnected: boolean
+    }>
+
+    normalizedHealth: number
+    normalizedAdrenaline: number
 
     maxHealth: number
     minAdrenaline: number
@@ -72,12 +84,12 @@ function serializePlayerData(stream: SuroiBitStream, data: Required<PlayerData>)
 
     stream.writeBoolean(dirty.health);
     if (dirty.health) {
-        stream.writeFloat(data.health, 0, data.maxHealth, 12);
+        stream.writeFloat(data.normalizedHealth, 0, 1, 12);
     }
 
     stream.writeBoolean(dirty.adrenaline);
     if (dirty.adrenaline) {
-        stream.writeFloat(data.adrenaline, data.minAdrenaline, data.maxAdrenaline, 12);
+        stream.writeFloat(data.normalizedAdrenaline, 0, 1, 12);
     }
 
     stream.writeBoolean(dirty.zoom);
@@ -89,6 +101,17 @@ function serializePlayerData(stream: SuroiBitStream, data: Required<PlayerData>)
     if (dirty.id) {
         stream.writeObjectID(data.id);
         stream.writeBoolean(data.spectating);
+    }
+
+    stream.writeBoolean(dirty.teammates);
+    if (dirty.teammates) {
+        stream.writeArray(data.teammates, 2, player => {
+            stream.writeObjectID(player.id);
+            stream.writePosition(player.position ?? Vec.create(0, 0));
+            stream.writeFloat(player.normalizedHealth, 0, 1, 8);
+            stream.writeBoolean(player.downed);
+            stream.writeBoolean(player.disconnected);
+        });
     }
 
     const inventory = data.inventory;
@@ -108,8 +131,8 @@ function serializePlayerData(stream: SuroiBitStream, data: Required<PlayerData>)
                     stream.writeUint8(weapon.count!);
                 }
 
-                if (weapon.definition.killstreak !== undefined) {
-                    stream.writeBits(weapon.stats!.kills!, 7);
+                if (weapon.definition.killstreak) {
+                    stream.writeUint8(weapon.stats!.kills!);
                 }
             }
         }
@@ -131,13 +154,7 @@ function serializePlayerData(stream: SuroiBitStream, data: Required<PlayerData>)
     }
 }
 
-interface PreviousData {
-    readonly maxHealth: number
-    readonly minAdrenaline: number
-    readonly maxAdrenaline: number
-}
-
-function deserializePlayerData(stream: SuroiBitStream, previousData: PreviousData): PlayerData {
+function deserializePlayerData(stream: SuroiBitStream): PlayerData {
     /* eslint-disable @typescript-eslint/consistent-type-assertions, no-cond-assign */
     const dirty = {} as PlayerData["dirty"];
     const inventory = {} as PlayerData["inventory"];
@@ -150,15 +167,11 @@ function deserializePlayerData(stream: SuroiBitStream, previousData: PreviousDat
     }
 
     if (dirty.health = stream.readBoolean()) {
-        data.health = stream.readFloat(0, data.maxHealth ?? previousData.maxHealth, 12);
+        data.normalizedHealth = stream.readFloat(0, 1, 12);
     }
 
     if (dirty.adrenaline = stream.readBoolean()) {
-        data.adrenaline = stream.readFloat(
-            data.minAdrenaline ?? previousData.minAdrenaline,
-            data.maxAdrenaline ?? previousData.maxAdrenaline,
-            12
-        );
+        data.normalizedAdrenaline = stream.readFloat(0, 1, 12);
     }
 
     if (dirty.zoom = stream.readBoolean()) {
@@ -168,6 +181,19 @@ function deserializePlayerData(stream: SuroiBitStream, previousData: PreviousDat
     if (dirty.id = stream.readBoolean()) {
         data.id = stream.readObjectID();
         data.spectating = stream.readBoolean();
+    }
+
+    if (dirty.teammates = stream.readBoolean()) {
+        data.teammates = [];
+        stream.readArray(data.teammates, 2, () => {
+            return {
+                id: stream.readObjectID(),
+                position: stream.readPosition(),
+                normalizedHealth: stream.readFloat(0, 1, 8),
+                downed: stream.readBoolean(),
+                disconnected: stream.readBoolean()
+            };
+        });
     }
 
     if (dirty.weapons = stream.readBoolean()) {
@@ -184,7 +210,7 @@ function deserializePlayerData(stream: SuroiBitStream, previousData: PreviousDat
                     definition,
                     count: stream.readBoolean() ? stream.readUint8() : undefined,
                     stats: {
-                        kills: definition.killstreak ? stream.readBits(7) : undefined
+                        kills: definition.killstreak ? stream.readUint8() : undefined
                     }
                 };
             }
@@ -204,122 +230,137 @@ function deserializePlayerData(stream: SuroiBitStream, previousData: PreviousDat
     return data;
 }
 
-const KILL_FEED_MESSAGE_TYPE_BITS = calculateEnumPacketBits(KillFeedMessageType);
-const KILL_TYPE_BITS = calculateEnumPacketBits(KillType);
+const KILLFEED_MESSAGE_TYPE_BITS = calculateEnumPacketBits(KillfeedMessageType);
+const KILLFEED_EVENT_TYPE_BITS = calculateEnumPacketBits(KillfeedEventType);
+const KILLFEED_EVENT_SEVERITY_BITS = calculateEnumPacketBits(KillfeedEventSeverity);
+
+const damageSourcesDefinitions = ObjectDefinitions.create<LootDefinition | ExplosionDefinition>([...Loots, ...Explosions]);
 
 function serializeKillFeedMessage(stream: SuroiBitStream, message: KillFeedMessage): void {
-    stream.writeBits(message.messageType, KILL_FEED_MESSAGE_TYPE_BITS);
+    stream.writeBits(message.messageType, KILLFEED_MESSAGE_TYPE_BITS);
     switch (message.messageType) {
-        case KillFeedMessageType.Kill: {
-            stream.writeObjectID(message.playerID!);
+        case KillfeedMessageType.DeathOrDown: {
+            stream.writeObjectID(message.victimId!);
 
-            stream.writeBits(message.killType ?? KillType.Suicide, KILL_TYPE_BITS);
-            if (message.killType === KillType.TwoPartyInteraction) {
-                stream.writeObjectID(message.killerID!);
-                stream.writeBits(message.kills!, 7);
+            const type = message.eventType ?? KillfeedEventType.Suicide;
+            stream.writeBits(type, KILLFEED_EVENT_TYPE_BITS);
+            if (
+                [
+                    KillfeedEventType.NormalTwoParty,
+                    KillfeedEventType.FinishedOff,
+                    KillfeedEventType.FinallyKilled
+                ].includes(type)
+            ) {
+                const hasAttacker = message.attackerId !== undefined;
+                stream.writeBoolean(hasAttacker);
+                if (hasAttacker) {
+                    stream.writeObjectID(message.attackerId!);
+                    stream.writeUint8(message.attackerKills!);
+                }
             }
+            stream.writeBits(message.severity ?? KillfeedEventSeverity.Kill, KILLFEED_EVENT_SEVERITY_BITS);
 
             const weaponWasUsed = message.weaponUsed !== undefined;
             stream.writeBoolean(weaponWasUsed);
             if (weaponWasUsed) {
-                const isExplosion = "shrapnelCount" in message.weaponUsed!; // hack to check if weapon used is an explosion
-                stream.writeBoolean(isExplosion);
-                if (isExplosion) {
-                    Explosions.writeToStream(stream, message.weaponUsed as ExplosionDefinition);
-                } else {
-                    Loots.writeToStream(stream, message.weaponUsed as LootDefinition);
-                }
-
+                damageSourcesDefinitions.writeToStream(stream, message.weaponUsed!);
                 if (
                     message.weaponUsed !== undefined &&
                     "killstreak" in message.weaponUsed &&
                     message.weaponUsed.killstreak
                 ) {
-                    stream.writeBits(message.killstreak!, 7);
+                    stream.writeUint8(message.killstreak!);
                 }
             }
             break;
         }
 
-        case KillFeedMessageType.KillLeaderAssigned: {
-            stream.writeObjectID(message.playerID!);
-            stream.writeBits(message.kills!, 7);
-            stream.writeBoolean(message.hideInKillfeed ?? false);
+        case KillfeedMessageType.KillLeaderAssigned: {
+            stream.writeObjectID(message.victimId!);
+            stream.writeUint8(message.attackerKills!);
+            stream.writeBoolean(message.hideFromKillfeed ?? false);
             break;
         }
 
-        case KillFeedMessageType.KillLeaderUpdated: {
-            stream.writeBits(message.kills!, 7);
+        case KillfeedMessageType.KillLeaderUpdated: {
+            stream.writeUint8(message.attackerKills!);
             break;
         }
 
-        case KillFeedMessageType.KillLeaderDead: {
-            stream.writeObjectID(message.playerID!);
-            stream.writeObjectID(message.killerID!);
+        case KillfeedMessageType.KillLeaderDead: {
+            stream.writeObjectID(message.victimId!);
+            stream.writeObjectID(message.attackerId!);
             break;
         }
     }
 }
 
 export interface KillFeedMessage {
-    messageType: KillFeedMessageType
-    playerID?: number
-    playerBadge?: BadgeDefinition
-    killType?: KillType
-    killerID?: number
-    killerBadge?: BadgeDefinition
-    kills?: number
+    messageType: KillfeedMessageType
+    victimId?: number
+    victimBadge?: BadgeDefinition
+    eventType?: KillfeedEventType
+    severity?: KillfeedEventSeverity
+    attackerId?: number
+    attackBadge?: BadgeDefinition
+    attackerKills?: number
     killstreak?: number
-    hideInKillfeed?: boolean
+    hideFromKillfeed?: boolean
     weaponUsed?: LootDefinition | ExplosionDefinition
 }
 
 function deserializeKillFeedMessage(stream: SuroiBitStream): KillFeedMessage {
     const message = {
-        messageType: stream.readBits(KILL_FEED_MESSAGE_TYPE_BITS)
+        messageType: stream.readBits(KILLFEED_MESSAGE_TYPE_BITS)
     } as KillFeedMessage;
 
     switch (message.messageType) {
-        case KillFeedMessageType.Kill: {
-            message.playerID = stream.readObjectID();
+        case KillfeedMessageType.DeathOrDown: {
+            message.victimId = stream.readObjectID();
 
-            message.killType = stream.readBits(KILL_TYPE_BITS);
-            if (message.killType === KillType.TwoPartyInteraction) {
-                message.killerID = stream.readObjectID();
-                message.kills = stream.readBits(7);
+            const type = message.eventType = stream.readBits(KILLFEED_EVENT_TYPE_BITS);
+            if (
+                [
+                    KillfeedEventType.NormalTwoParty,
+                    KillfeedEventType.FinishedOff,
+                    KillfeedEventType.FinallyKilled
+                ].includes(type) &&
+                stream.readBoolean() // attacker present
+            ) {
+                message.attackerId = stream.readObjectID();
+                message.attackerKills = stream.readUint8();
             }
+            message.severity = stream.readBits(KILLFEED_EVENT_SEVERITY_BITS);
 
             if (stream.readBoolean()) { // used a weapon
-                message.weaponUsed = stream.readBoolean() // is explosion
-                    ? Explosions.readFromStream(stream)
-                    : Loots.readFromStream(stream);
+                message.weaponUsed = damageSourcesDefinitions.readFromStream(stream);
 
                 if (
                     message.weaponUsed !== undefined &&
                     "killstreak" in message.weaponUsed &&
                     message.weaponUsed.killstreak
                 ) {
-                    message.killstreak = stream.readBits(7);
+                    message.killstreak = stream.readUint8();
                 }
             }
             break;
         }
 
-        case KillFeedMessageType.KillLeaderAssigned: {
-            message.playerID = stream.readObjectID();
-            message.kills = stream.readBits(7);
-            message.hideInKillfeed = stream.readBoolean();
+        case KillfeedMessageType.KillLeaderAssigned: {
+            message.victimId = stream.readObjectID();
+            message.attackerKills = stream.readUint8();
+            message.hideFromKillfeed = stream.readBoolean();
             break;
         }
 
-        case KillFeedMessageType.KillLeaderUpdated: {
-            message.kills = stream.readBits(7);
+        case KillfeedMessageType.KillLeaderUpdated: {
+            message.attackerKills = stream.readUint8();
             break;
         }
 
-        case KillFeedMessageType.KillLeaderDead: {
-            message.playerID = stream.readObjectID();
-            message.killerID = stream.readObjectID();
+        case KillfeedMessageType.KillLeaderDead: {
+            message.victimId = stream.readObjectID();
+            message.attackerId = stream.readObjectID();
             break;
         }
     }
@@ -346,30 +387,36 @@ const UpdateFlags = Object.freeze({
 
 const UPDATE_FLAGS_BITS = Object.keys(UpdateFlags).length;
 
-export class UpdatePacket extends Packet {
+export class UpdatePacket extends AbstractPacket {
     override readonly allocBytes = 1 << 16;
     override readonly type = PacketType.Update;
 
     playerData!: PlayerData;
 
-    // client side only
-    // used to store previous sent max and min health / adrenaline
-    previousData!: PreviousData;
+    deletedObjects: number[] = [];
 
-    deletedObjects = new Set<number>();
+    fullDirtyObjects: ObjectFullData[] = [];
 
-    fullDirtyObjects = new Set<ObjectFullData>();
-
-    partialDirtyObjects = new Set<ObjectPartialData>();
+    partialDirtyObjects: ObjectPartialData[] = [];
 
     // server side only
-    bullets = new Set<BaseBullet>();
 
-    deserializedBullets = new Set<BulletOptions>();
+    fullObjectsCache: Array<{
+        partialStream: SuroiBitStream
+        fullStream: SuroiBitStream
+    }> = [];
 
-    explosions = new Set<{ readonly definition: ExplosionDefinition, readonly position: Vector }>();
+    partialObjectsCache: Array<{
+        partialStream: SuroiBitStream
+    }> = [];
 
-    emotes = new Set<{ readonly definition: EmoteDefinition, readonly playerID: number }>();
+    bullets: BaseBullet[] = [];
+
+    deserializedBullets: BulletOptions[] = [];
+
+    explosions: Array<{ readonly definition: ExplosionDefinition, readonly position: Vector }> = [];
+
+    emotes: Array<{ readonly definition: EmoteDefinition, readonly playerID: number }> = [];
 
     gas?: {
         readonly state: GasState
@@ -386,47 +433,51 @@ export class UpdatePacket extends Packet {
         readonly value: number
     };
 
-    newPlayers = new Set<{
+    newPlayers: Array<{
         readonly id: number
         readonly name: string
         readonly loadout: { readonly badge?: BadgeDefinition }
         readonly hasColor: boolean
         readonly nameColor: number
-    }>();
+    }> = [];
 
-    deletedPlayers = new Set<number>();
+    deletedPlayers: number[] = [];
 
     aliveCountDirty?: boolean;
     aliveCount?: number;
 
-    killFeedMessages = new Set<KillFeedMessage>();
+    killFeedMessages: KillFeedMessage[] = [];
 
-    planes = new Set<{ readonly position: Vector, readonly direction: number }>();
+    planes: Array<{
+        readonly position: Vector
+        readonly direction: number
+    }> = [];
 
-    mapPings = new Set<Vector>();
+    mapPings: Array<{
+        readonly position: Vector
+        readonly definition: MapPingDefinition
+        readonly playerId?: number
+    }> = [];
 
-    override serialize(): void {
-        super.serialize();
-        const stream = this.stream;
-
+    override serialize(stream: SuroiBitStream): void {
         const playerDataDirty = Object.values(this.playerData.dirty).some(v => v);
 
         const flags =
             (+!!playerDataDirty && UpdateFlags.PlayerData) |
-            (+!!this.deletedObjects.size && UpdateFlags.DeletedObjects) |
-            (+!!this.fullDirtyObjects.size && UpdateFlags.FullObjects) |
-            (+!!this.partialDirtyObjects.size && UpdateFlags.PartialObjects) |
-            (+!!this.bullets.size && UpdateFlags.Bullets) |
-            (+!!this.explosions.size && UpdateFlags.Explosions) |
-            (+!!this.emotes.size && UpdateFlags.Emotes) |
+            (+!!this.deletedObjects.length && UpdateFlags.DeletedObjects) |
+            (+!!this.fullObjectsCache.length && UpdateFlags.FullObjects) |
+            (+!!this.partialObjectsCache.length && UpdateFlags.PartialObjects) |
+            (+!!this.bullets.length && UpdateFlags.Bullets) |
+            (+!!this.explosions.length && UpdateFlags.Explosions) |
+            (+!!this.emotes.length && UpdateFlags.Emotes) |
             (+!!this.gas?.dirty && UpdateFlags.Gas) |
             (+!!this.gasProgress?.dirty && UpdateFlags.GasPercentage) |
-            (+!!this.newPlayers.size && UpdateFlags.NewPlayers) |
-            (+!!this.deletedPlayers.size && UpdateFlags.DeletedPlayers) |
+            (+!!this.newPlayers.length && UpdateFlags.NewPlayers) |
+            (+!!this.deletedPlayers.length && UpdateFlags.DeletedPlayers) |
             (+!!this.aliveCountDirty && UpdateFlags.AliveCount) |
-            (+!!this.killFeedMessages.size && UpdateFlags.KillFeedMessages) |
-            (+!!this.planes.size && UpdateFlags.Planes) |
-            (+!!this.mapPings.size && UpdateFlags.MapPings);
+            (+!!this.killFeedMessages.length && UpdateFlags.KillFeedMessages) |
+            (+!!this.planes.length && UpdateFlags.Planes) |
+            (+!!this.mapPings.length && UpdateFlags.MapPings);
 
         stream.writeBits(flags, UPDATE_FLAGS_BITS);
 
@@ -435,49 +486,44 @@ export class UpdatePacket extends Packet {
         }
 
         if (flags & UpdateFlags.DeletedObjects) {
-            stream.writeUint16(this.deletedObjects.size);
-            for (const id of this.deletedObjects) stream.writeObjectID(id);
+            stream.writeArray(this.deletedObjects, OBJECT_ID_BITS, (id) => {
+                stream.writeObjectID(id);
+            });
         }
 
         if (flags & UpdateFlags.FullObjects) {
-            stream.writeUint16(this.fullDirtyObjects.size);
-            for (const object of this.fullDirtyObjects) {
-                stream.writeObjectID(object.id);
-                stream.writeObjectType(object.type);
-                (ObjectSerializations[object.type].serializeFull as (stream: SuroiBitStream, data: typeof object.data) => void)(stream, object.data);
-            }
+            stream.writeAlignToNextByte();
+            stream.writeArray(this.fullObjectsCache, 16, (object) => {
+                stream.writeBytes(object.partialStream, 0, object.partialStream.byteIndex);
+                stream.writeBytes(object.fullStream, 0, object.fullStream.byteIndex);
+            });
         }
 
         if (flags & UpdateFlags.PartialObjects) {
-            stream.writeUint16(this.partialDirtyObjects.size);
-            for (const object of this.partialDirtyObjects) {
-                stream.writeObjectID(object.id);
-                stream.writeObjectType(object.type);
-                (ObjectSerializations[object.type].serializePartial as (stream: SuroiBitStream, data: typeof object.data) => void)(stream, object.data);
-            }
+            stream.writeAlignToNextByte();
+            stream.writeArray(this.partialObjectsCache, 16, (object) => {
+                stream.writeBytes(object.partialStream, 0, object.partialStream.byteIndex);
+            });
         }
 
         if (flags & UpdateFlags.Bullets) {
-            stream.writeUint8(this.bullets.size);
-            for (const bullet of this.bullets) {
+            stream.writeArray(this.bullets, 8, bullet => {
                 bullet.serialize(stream);
-            }
+            });
         }
 
         if (flags & UpdateFlags.Explosions) {
-            stream.writeUint8(this.explosions.size);
-            for (const explosion of this.explosions) {
+            stream.writeArray(this.explosions, 8, (explosion) => {
                 Explosions.writeToStream(stream, explosion.definition);
                 stream.writePosition(explosion.position);
-            }
+            });
         }
 
         if (flags & UpdateFlags.Emotes) {
-            stream.writeBits(this.emotes.size, 13);
-            for (const emote of this.emotes) {
+            stream.writeArray(this.emotes, 8, (emote) => {
                 Emotes.writeToStream(stream, emote.definition);
                 stream.writeObjectID(emote.playerID);
-            }
+            });
         }
 
         if (flags & UpdateFlags.Gas) {
@@ -495,44 +541,34 @@ export class UpdatePacket extends Packet {
         }
 
         if (flags & UpdateFlags.NewPlayers) {
-            stream.writeUint8(this.newPlayers.size);
-
-            for (const player of this.newPlayers) {
+            stream.writeArray(this.newPlayers, 8, (player) => {
                 stream.writeObjectID(player.id);
                 stream.writePlayerName(player.name);
                 stream.writeBoolean(player.hasColor);
                 if (player.hasColor) stream.writeBits(player.nameColor, 24);
 
-                const hasBadge = player.loadout.badge !== undefined;
-                stream.writeBoolean(hasBadge);
-                if (hasBadge) Badges.writeToStream(stream, player.loadout.badge);
-            }
+                Badges.writeOptional(stream, player.loadout.badge);
+            });
         }
 
         if (flags & UpdateFlags.DeletedPlayers) {
-            stream.writeUint8(this.deletedPlayers.size);
-
-            for (const player of this.deletedPlayers) {
-                stream.writeObjectID(player);
-            }
+            stream.writeArray(this.deletedPlayers, 8, (id) => {
+                stream.writeObjectID(id);
+            });
         }
 
         if (flags & UpdateFlags.AliveCount) {
-            stream.writeBits(this.aliveCount!, 7);
+            stream.writeUint8(this.aliveCount!);
         }
 
         if (flags & UpdateFlags.KillFeedMessages) {
-            stream.writeUint8(this.killFeedMessages.size);
-
-            for (const message of this.killFeedMessages) {
+            stream.writeArray(this.killFeedMessages, 8, (message) => {
                 serializeKillFeedMessage(stream, message);
-            }
+            });
         }
 
         if (flags & UpdateFlags.Planes) {
-            stream.writeBits(this.planes.size, 4);
-
-            for (const plane of this.planes) {
+            stream.writeArray(this.planes, 4, (plane) => {
                 stream.writeVector(
                     plane.position,
                     -GameConstants.maxPosition,
@@ -541,15 +577,17 @@ export class UpdatePacket extends Packet {
                     GameConstants.maxPosition * 2,
                     24);
                 stream.writeRotation(plane.direction, 16);
-            }
+            });
         }
 
         if (flags & UpdateFlags.MapPings) {
-            stream.writeBits(this.mapPings.size, 4);
-
-            for (const ping of this.mapPings) {
-                stream.writePosition(ping);
-            }
+            stream.writeArray(this.mapPings, 4, (ping) => {
+                MapPings.writeToStream(stream, ping.definition);
+                stream.writePosition(ping.position);
+                if (ping.definition.isPlayerPing) {
+                    stream.writeObjectID(ping.playerId!);
+                }
+            });
         }
     }
 
@@ -557,69 +595,71 @@ export class UpdatePacket extends Packet {
         const flags = stream.readBits(UPDATE_FLAGS_BITS);
 
         if (flags & UpdateFlags.PlayerData) {
-            this.playerData = deserializePlayerData(stream, this.previousData);
+            this.playerData = deserializePlayerData(stream);
         }
 
         if (flags & UpdateFlags.DeletedObjects) {
-            const count = stream.readUint16();
-
-            for (let i = 0; i < count; i++) {
-                this.deletedObjects.add(stream.readObjectID());
-            }
+            stream.readArray(this.deletedObjects, OBJECT_ID_BITS, () => {
+                return stream.readObjectID();
+            });
         }
 
         if (flags & UpdateFlags.FullObjects) {
-            const count = stream.readUint16();
+            stream.readAlignToNextByte();
 
-            for (let i = 0; i < count; i++) {
+            stream.readArray(this.fullDirtyObjects, 16, () => {
                 const id = stream.readObjectID();
                 const type = stream.readObjectType();
-                const data = ObjectSerializations[type].deserializeFull(stream);
 
-                this.fullDirtyObjects.add({ id, type, data });
-            }
+                const partialData = ObjectSerializations[type].deserializePartial(stream);
+                stream.readAlignToNextByte();
+                const fullData = ObjectSerializations[type].deserializeFull(stream);
+                stream.readAlignToNextByte();
+                return {
+                    id,
+                    type,
+                    data: {
+                        ...partialData,
+                        full: fullData
+                    } as ObjectsNetData[typeof type]
+                };
+            });
         }
 
         if (flags & UpdateFlags.PartialObjects) {
-            const count = stream.readUint16();
+            stream.readAlignToNextByte();
 
-            for (let i = 0; i < count; i++) {
+            stream.readArray(this.partialDirtyObjects, 16, () => {
                 const id = stream.readObjectID();
                 const type = stream.readObjectType();
                 const data = ObjectSerializations[type].deserializePartial(stream);
-
-                this.partialDirtyObjects.add({ id, type, data });
-            }
+                stream.readAlignToNextByte();
+                return { id, type, data };
+            });
         }
 
         if (flags & UpdateFlags.Bullets) {
-            const count = stream.readUint8();
-
-            for (let i = 0; i < count; i++) {
-                this.deserializedBullets.add(BaseBullet.deserialize(stream));
-            }
+            stream.readArray(this.deserializedBullets, 8, () => {
+                return BaseBullet.deserialize(stream);
+            });
         }
 
         if (flags & UpdateFlags.Explosions) {
-            const count = stream.readUint8();
-
-            for (let i = 0; i < count; i++) {
-                this.explosions.add({
+            stream.readArray(this.explosions, 8, () => {
+                return {
                     definition: Explosions.readFromStream(stream),
                     position: stream.readPosition()
-                });
-            }
+                };
+            });
         }
 
         if (flags & UpdateFlags.Emotes) {
-            const count = stream.readBits(13);
-
-            for (let i = 0; i < count; i++) {
-                this.emotes.add({
+            stream.readArray(this.emotes, 8, () => {
+                return {
                     definition: Emotes.readFromStream(stream),
                     playerID: stream.readObjectID()
-                });
-            }
+                };
+            });
         }
 
         if (flags & UpdateFlags.Gas) {
@@ -642,50 +682,42 @@ export class UpdatePacket extends Packet {
         }
 
         if (flags & UpdateFlags.NewPlayers) {
-            const count = stream.readUint8();
-
-            for (let i = 0; i < count; i++) {
+            stream.readArray(this.newPlayers, 8, () => {
                 const id = stream.readObjectID();
                 const name = stream.readPlayerName();
                 const hasColor = stream.readBoolean();
 
-                this.newPlayers.add({
+                return {
                     id,
                     name,
                     hasColor,
                     nameColor: hasColor ? stream.readBits(24) : 0,
                     loadout: {
-                        badge: stream.readBoolean() ? Badges.readFromStream(stream) : undefined
+                        badge: Badges.readOptional(stream)
                     }
-                });
-            }
+                };
+            });
         }
 
         if (flags & UpdateFlags.DeletedPlayers) {
-            const size = stream.readUint8();
-
-            for (let i = 0; i < size; i++) {
-                this.deletedPlayers.add(stream.readObjectID());
-            }
+            stream.readArray(this.deletedPlayers, 8, () => {
+                return stream.readObjectID();
+            });
         }
 
         if (flags & UpdateFlags.AliveCount) {
             this.aliveCountDirty = true;
-            this.aliveCount = stream.readBits(7);
+            this.aliveCount = stream.readUint8();
         }
 
         if (flags & UpdateFlags.KillFeedMessages) {
-            const count = stream.readUint8();
-
-            for (let i = 0; i < count; i++) {
-                this.killFeedMessages.add(deserializeKillFeedMessage(stream));
-            }
+            stream.readArray(this.killFeedMessages, 8, () => {
+                return deserializeKillFeedMessage(stream);
+            });
         }
 
         if (flags & UpdateFlags.Planes) {
-            const count = stream.readBits(4);
-
-            for (let i = 0; i < count; i++) {
+            stream.readArray(this.planes, 4, () => {
                 const position = stream.readVector(
                     -GameConstants.maxPosition,
                     -GameConstants.maxPosition,
@@ -695,15 +727,21 @@ export class UpdatePacket extends Packet {
                 );
                 const direction = stream.readRotation(16);
 
-                this.planes.add({ position, direction });
-            }
+                return { position, direction };
+            });
         }
 
         if (flags & UpdateFlags.MapPings) {
-            const count = stream.readBits(4);
-            for (let i = 0; i < count; i++) {
-                this.mapPings.add(stream.readPosition());
-            }
+            stream.readArray(this.mapPings, 4, () => {
+                const definition = MapPings.readFromStream(stream);
+                const position = stream.readPosition();
+                const playerId = definition.isPlayerPing ? stream.readObjectID() : undefined;
+                return {
+                    definition,
+                    position,
+                    playerId
+                };
+            });
         }
     }
 }

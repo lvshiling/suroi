@@ -2,7 +2,7 @@ import { ObjectCategory, ZIndexes } from "../../../../common/src/constants";
 import { type ObstacleDefinition } from "../../../../common/src/definitions/obstacles";
 import { type Orientation, type Variation } from "../../../../common/src/typings";
 import { CircleHitbox, type Hitbox, type RectangleHitbox } from "../../../../common/src/utils/hitbox";
-import { Angle, calculateDoorHitboxes, EaseFunctions, Numeric } from "../../../../common/src/utils/math";
+import { Angle, EaseFunctions, Numeric, calculateDoorHitboxes } from "../../../../common/src/utils/math";
 import { ObstacleSpecialRoles } from "../../../../common/src/utils/objectDefinitions";
 import { type ObjectsNetData } from "../../../../common/src/utils/objectsSerializations";
 import { randomBoolean, randomFloat, randomRotation } from "../../../../common/src/utils/random";
@@ -11,8 +11,7 @@ import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { HITBOX_COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE } from "../utils/constants";
 import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
-import { type GameSound } from "../utils/soundManager";
-import { Tween } from "../utils/tween";
+import { type GameSound } from "../managers/soundManager";
 import { GameObject } from "./gameObject";
 import { type ParticleEmitter, type ParticleOptions } from "./particles";
 import { type Player } from "./player";
@@ -69,7 +68,7 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
             if (definition.invisible) this.container.visible = false;
 
             // If there are multiple particle variations, generate a list of variation image names
-            const particleImage = definition.frames?.particle ?? `${definition.idString}_particle`;
+            const particleImage = definition.frames.particle ?? `${definition.idString}_particle`;
 
             this.particleFrames = definition.particleVariations !== undefined
                 ? Array.from({ length: definition.particleVariations }, (_, i) => `${particleImage}_${i + 1}`)
@@ -174,14 +173,12 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                     });
                 };
                 playSound(`${definition.material}_destroyed`);
-                if (definition.additionalDestroySounds) {
-                    for (const sound of definition.additionalDestroySounds) playSound(sound);
-                }
+                for (const sound of definition.additionalDestroySounds) playSound(sound);
 
                 if (definition.noResidue) {
                     this.image.setVisible(false);
                 } else {
-                    this.image.setFrame(definition.frames?.residue ?? `${definition.idString}_residue`);
+                    this.image.setFrame(definition.frames.residue ?? `${definition.idString}_residue`);
                 }
 
                 this.container.rotation = this.rotation;
@@ -228,14 +225,14 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
         const pos = toPixiCoords(this.position);
         this.container.position.copyFrom(pos);
 
-        this.image.setVisible(!(this.dead && !!definition.noResidue));
+        this.image.setVisible(!(this.dead && definition.noResidue));
 
         if (!texture) {
             texture = !this.dead
-                ? this.activated && definition.frames?.activated
+                ? this.activated && definition.frames.activated
                     ? definition.frames.activated
-                    : definition.frames?.base ?? `${definition.idString}`
-                : definition.frames?.residue ?? `${definition.idString}_residue`;
+                    : definition.frames.base ?? `${definition.idString}`
+                : definition.frames.residue ?? `${definition.idString}_residue`;
         }
 
         if (this.variation !== undefined && !this.dead) texture += `_${this.variation + 1}`;
@@ -250,7 +247,7 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
             this.debugGraphics.clear();
             drawHitbox(
                 this.hitbox,
-                definition.noCollisions === true || this.dead
+                definition.noCollisions || this.dead
                     ? HITBOX_COLORS.obstacleNoCollision
                     : HITBOX_COLORS.obstacle,
                 this.debugGraphics
@@ -341,16 +338,14 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
             );
 
             if (definition.operationStyle !== "slide") {
-                // eslint-disable-next-line no-new
-                new Tween(this.game, {
+                this.game.addTween({
                     target: this.image,
                     to: { rotation: Angle.orientationToRotation(offset) },
                     duration: definition.animationDuration ?? 150
                 });
             } else {
                 const x = offset ? (definition.slideFactor ?? 1) * (backupHitbox.min.x - backupHitbox.max.x) * PIXI_SCALE : 0;
-                // eslint-disable-next-line no-new
-                new Tween(this.game, {
+                this.game.addTween({
                     target: this.image.position,
                     to: { x, y: 0 },
                     duration: 150

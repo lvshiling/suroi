@@ -85,7 +85,7 @@ export class BaseBullet {
 
         this.velocity = Vec.scale(this.direction, this.definition.speed * (this.rangeVariance + 1));
 
-        this.canHitShooter = (this.definition.shrapnel ?? this.reflectionCount > 0);
+        this.canHitShooter = this.definition.shrapnel || this.reflectionCount > 0;
     }
 
     /**
@@ -94,7 +94,7 @@ export class BaseBullet {
      * @param objects A set containing objects to check for collision
      * @returns An array containing the objects that the bullet collided and the intersection data
      */
-    updateAndGetCollisions(delta: number, objects: { [Symbol.iterator]: () => Iterator<GameObject> }): Collision[] {
+    updateAndGetCollisions(delta: number, objects: Iterable<GameObject>): Collision[] {
         const oldPosition = Vec.clone(this.position);
 
         this.position = Vec.add(this.position, Vec.scale(this.velocity, delta));

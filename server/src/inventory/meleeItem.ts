@@ -41,7 +41,7 @@ export class MeleeItem extends InventoryItem<MeleeDefinition> {
 
         this._lastUse = owner.game.now;
         owner.animation = AnimationType.Melee;
-        owner.game.partialDirtyObjects.add(owner);
+        owner.setPartialDirty();
 
         owner.action?.cancel();
 
@@ -50,6 +50,7 @@ export class MeleeItem extends InventoryItem<MeleeDefinition> {
                 this.owner.activeItem === this &&
                 (owner.attacking || skipAttackCheck) &&
                 !owner.dead &&
+                !owner.downed &&
                 !owner.disconnected
             ) {
                 const rotated = Vec.rotate(definition.offset, owner.rotation);

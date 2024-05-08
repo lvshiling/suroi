@@ -31,6 +31,7 @@ export class ThrowableItem extends CountableInventoryItem<ThrowableDefinition> {
         if (
             (!skipAttackCheck && !owner.attacking) ||
             owner.dead ||
+            owner.downed ||
             owner.disconnected ||
             this !== this.owner.activeItem ||
             this._activeHandler
@@ -40,7 +41,7 @@ export class ThrowableItem extends CountableInventoryItem<ThrowableDefinition> {
 
         this._lastUse = owner.game.now;
         owner.animation = AnimationType.ThrowableCook;
-        owner.game.partialDirtyObjects.add(owner);
+        owner.setPartialDirty();
 
         owner.action?.cancel();
 
@@ -58,7 +59,7 @@ export class ThrowableItem extends CountableInventoryItem<ThrowableDefinition> {
 
     override useItem(): void {
         super._bufferAttack(
-            this.definition.fireDelay ?? 250,
+            this.definition.fireDelay,
             this._useItemNoDelayCheck.bind(this, true)
         );
     }
@@ -111,7 +112,7 @@ class GrenadeHandler {
         }
 
         owner.animation = AnimationType.ThrowableThrow;
-        owner.game.partialDirtyObjects.add(owner);
+        owner.setPartialDirty();
     }
 
     cook(): void {

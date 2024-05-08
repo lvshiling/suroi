@@ -63,6 +63,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
         if (
             (!skipAttackCheck && !owner.attacking) ||
             owner.dead ||
+            owner.downed ||
             owner.disconnected ||
             this !== this.owner.activeItem ||
             (definition.summonAirdrop && owner.isInsideBuilding)
@@ -74,7 +75,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
         if (this.ammo <= 0) {
             if (!owner.inventory.items.hasItem(definition.ammoType)) {
                 owner.animation = AnimationType.GunClick;
-                owner.game.partialDirtyObjects.add(owner);
+                owner.setPartialDirty();
             }
 
             this._shots = 0;
@@ -90,7 +91,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
                 ? AnimationType.GunAlt
                 : AnimationType.Gun;
 
-        owner.game.partialDirtyObjects.add(owner);
+        owner.setPartialDirty();
 
         owner.dirty.weapons = true;
 
@@ -101,18 +102,18 @@ export class GunItem extends InventoryItem<GunDefinition> {
         const { moveSpread, shotSpread } = definition;
 
         const spread = Angle.degreesToRadians((this.owner.isMoving ? moveSpread : shotSpread) / 2);
-        const jitter = definition.jitterRadius ?? 0;
+        const jitter = definition.jitterRadius;
 
         const offset = definition.isDual
             // eslint-disable-next-line no-cond-assign
             ? ((this._altFire = !this._altFire) ? 1 : -1) * definition.leftRightOffset
-            : 0;
+            : (definition.bulletOffset ?? 0);
 
         const startPosition = Vec.rotate(Vec.create(0, offset), owner.rotation);
 
         let position = Vec.add(
             owner.position,
-            Vec.rotate(Vec.create(definition.length + (definition.centerJitterOnMuzzle ? 0 : jitter), offset), owner.rotation) // player radius + gun length
+            Vec.rotate(Vec.create(definition.length, offset), owner.rotation) // player radius + gun length
         );
 
         for (
@@ -123,7 +124,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
                 object.dead ||
                 object.hitbox === undefined ||
                 !(object instanceof Obstacle) ||
-                object.definition.noCollisions === true
+                object.definition.noCollisions
             ) continue;
 
             for (
@@ -134,7 +135,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
                     object.dead ||
                     object.hitbox === undefined ||
                     !(object instanceof Obstacle) ||
-                    object.definition.noCollisions === true
+                    object.definition.noCollisions
                 ) continue;
 
                 const intersection = object.hitbox.intersectsLine(owner.position, position);
@@ -147,7 +148,7 @@ export class GunItem extends InventoryItem<GunDefinition> {
         }
 
         const rangeOverride = this.owner.distanceToMouse - this.definition.length;
-        const projCount = definition.bulletCount ?? 1;
+        const projCount = definition.bulletCount;
 
         for (let i = 0; i < projCount; i++) {
             this.owner.game.addBullet(
@@ -158,9 +159,11 @@ export class GunItem extends InventoryItem<GunDefinition> {
                         ? randomPointInsideCircle(position, jitter)
                         : position,
                     rotation: owner.rotation + Math.PI / 2 +
-                        (definition.consistentPatterning === true
-                            ? 2 * (i / projCount - 0.5)
-                            : randomFloat(-1, 1)) * spread,
+                        (
+                            definition.consistentPatterning
+                                ? 8 * (i / (projCount - 1) - 0.5) ** 3
+                                : randomFloat(-1, 1)
+                        ) * spread,
                     rangeOverride
                 }
             );
@@ -221,12 +224,13 @@ export class GunItem extends InventoryItem<GunDefinition> {
 
     reload(skipFireDelayCheck = false): void {
         if (
-            this.definition.infiniteAmmo === true ||
+            this.definition.infiniteAmmo ||
             this.ammo >= this.definition.capacity ||
             !this.owner.inventory.items.hasItem(this.definition.ammoType) ||
             this.owner.action !== undefined ||
             this.owner.activeItem !== this ||
-            (!skipFireDelayCheck && this.owner.game.now - this._lastUse < this.definition.fireDelay)
+            (!skipFireDelayCheck && this.owner.game.now - this._lastUse < this.definition.fireDelay) ||
+            this.owner.downed
         ) return;
 
         this.owner.executeAction(new ReloadAction(this.owner, this));

@@ -13,7 +13,9 @@ import { Obstacle } from "./obstacle";
 import { Player } from "./player";
 
 export class ThrowableProjectile extends BaseGameObject<ObjectCategory.ThrowableProjectile> {
-    readonly type = ObjectCategory.ThrowableProjectile;
+    override readonly type = ObjectCategory.ThrowableProjectile;
+    override readonly fullAllocBytes = 16;
+    override readonly partialAllocBytes = 4;
 
     readonly definition: ThrowableDefinition;
 
@@ -92,7 +94,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
         let displacement = Vec.scale(this.velocity, halfDt);
 
         const displacementLength = Vec.length(displacement);
-        const maxDisplacement = (this.definition.speedCap ?? Infinity) * halfDt;
+        const maxDisplacement = this.definition.speedCap * halfDt;
 
         if (displacementLength >= maxDisplacement) {
             displacement = Vec.scale(displacement, maxDisplacement / displacementLength);
@@ -137,7 +139,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
             return flyoverCondMap[
                 obstacle.door?.isOpen === false
                     ? FlyoverPref.Never
-                    : obstacle.definition.allowFlyover ?? FlyoverPref.Sometimes
+                    : obstacle.definition.allowFlyover
             ];
         };
 
@@ -258,10 +260,10 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
         this._collideWithOwner ||= this.game.now - this._spawnTime >= 250;
         this._damagedLastTick = damagedThisTick;
         this.game.grid.updateObject(this);
-        this.game.partialDirtyObjects.add(this);
+        this.setPartialDirty();
     }
 
-    damage(_amount: number, _source?: BaseGameObject<ObjectCategory> | undefined): void { }
+    damage(_amount: number, _source?: GameObject): void { }
 
     get data(): FullData<ObjectCategory.ThrowableProjectile> {
         return {

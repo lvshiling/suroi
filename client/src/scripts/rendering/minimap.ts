@@ -1,7 +1,8 @@
-import "@pixi/graphics-extras";
 import $ from "jquery";
-import { Container, Graphics, LINE_CAP, RenderTexture, Sprite, Text, Texture, isMobile, type ColorSource } from "pixi.js";
+import { DropShadowFilter } from "pixi-filters";
+import { Container, Graphics, RenderTexture, Sprite, Text, isMobile, type ColorSource, type Texture } from "pixi.js";
 import { GameConstants, GasState, ObjectCategory, ZIndexes } from "../../../../common/src/constants";
+import { type MapPingDefinition } from "../../../../common/src/definitions/mapPings";
 import { type MapPacket } from "../../../../common/src/packets/mapPacket";
 import { type Orientation } from "../../../../common/src/typings";
 import { CircleHitbox, HitboxGroup, PolygonHitbox, RectangleHitbox, type Hitbox } from "../../../../common/src/utils/hitbox";
@@ -9,14 +10,17 @@ import { Angle, Numeric } from "../../../../common/src/utils/math";
 import { FloorTypes, River, Terrain } from "../../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
-import { COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE } from "../utils/constants";
-import { SuroiSprite, drawHitbox } from "../utils/pixi";
+import { type Player } from "../objects/player";
+import { COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE, TEAMMATE_COLORS } from "../utils/constants";
+import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
 import { GasRender } from "./gas";
 
 export class Minimap {
     game: Game;
     expanded = false;
+
     visible = true;
+
     position = Vec.create(0, 0);
     lastPosition = Vec.create(0, 0);
 
@@ -29,8 +33,15 @@ export class Minimap {
     readonly container = new Container();
     readonly mask = new Graphics();
 
-    readonly sprite = new Sprite(Texture.EMPTY);
-    readonly indicator = new SuroiSprite("player_indicator.svg");
+    readonly sprite = new Sprite();
+    texture?: Texture;
+
+    readonly indicator = new SuroiSprite("player_indicator")
+        .setTint(TEAMMATE_COLORS[0])
+        .setZIndex(1000);
+
+    readonly teammateIndicators = new Map<number, SuroiSprite>();
+    readonly teammateIndicatorContainer = new Container();
 
     width = 0;
     height = 0;
@@ -45,7 +56,7 @@ export class Minimap {
 
     terrain = new Terrain(0, 0, 0, 0, 0, []);
 
-    readonly pings = new Set<Ping>();
+    readonly pings = new Set<MapPing>();
     readonly border = new Graphics();
     readonly pingsContainer = new Container();
     readonly pingGraphics = new Graphics();
@@ -56,17 +67,13 @@ export class Minimap {
 
     constructor(game: Game) {
         this.game = game;
-        game.pixi.stage.addChild(this.container);
-
         this.objectsContainer.mask = this.mask;
 
         this.container.addChild(this.objectsContainer);
         this.container.addChild(this.border);
 
-        window.addEventListener("resize", this.resize.bind(this));
-        this.resize();
-
-        if (this.game.console.getBuiltInCVar("cv_minimap_minimized")) this.toggleMinimap();
+        this.gasGraphics.zIndex = 998;
+        this.teammateIndicatorContainer.zIndex = 999;
 
         this.objectsContainer.addChild(
             this.sprite,
@@ -75,13 +82,21 @@ export class Minimap {
             this.gasGraphics,
             this.pingGraphics,
             this.pingsContainer,
-            this.indicator
+            this.indicator,
+            this.teammateIndicatorContainer
         ).sortChildren();
 
-        this.borderContainer.on("click", e => {
+        this._borderContainer.on("click", e => {
             if (!this.game.inputManager.isMobile) return;
             this.switchToBigMap();
             e.stopImmediatePropagation();
+        });
+
+        this.sprite.eventMode = "static";
+
+        this.sprite.on("pointerdown", e => {
+            this.game.inputManager.pingWheelPosition = this.sprite.toLocal(e);
+            this.game.inputManager.pingWheelMinimap = true;
         });
 
         $("#btn-close-minimap").on("pointerdown", e => {
@@ -125,29 +140,20 @@ export class Minimap {
 
         const drawTerrain = (ctx: Graphics, scale: number, gridLineWidth: number): void => {
             ctx.zIndex = ZIndexes.Ground;
-            ctx.beginFill();
-
-            ctx.fill.color = COLORS.water.toNumber();
-            ctx.drawRect(0, 0, width * scale, height * scale);
 
             const radius = 20 * scale;
 
             const beach = scale === 1 ? beachPoints : beachPoints.map(point => Vec.scale(point, scale));
             // The grass is a hole in the map shape, the background clear color is the grass color
-            ctx.beginHole();
-            ctx.drawRoundedShape?.(beach, radius);
-            ctx.endHole();
+            ctx.roundShape(beach, radius);
+            ctx.cut();
 
-            ctx.fill.color = COLORS.beach.toNumber();
-
-            ctx.drawRoundedShape?.(beach, radius);
-
-            ctx.beginHole();
+            ctx.roundShape?.(beach, radius);
+            ctx.fill(COLORS.beach);
 
             const grass = scale === 1 ? grassPoints : grassPoints.map(point => Vec.scale(point, scale));
-            ctx.drawRoundedShape?.(grass, radius);
-
-            ctx.endHole();
+            ctx.roundShape(grass, radius);
+            ctx.cut();
 
             // gets the river polygon with the middle 2 points not rounded
             // so it joins nicely with other rivers
@@ -162,25 +168,26 @@ export class Minimap {
                 });
             }
 
-            // no rivers breaks map graphics
-            if (rivers.length) {
-                // river bank needs to be draw first
-                for (const river of rivers) {
-                    ctx.fill.color = COLORS.riverBank.toNumber();
-                    ctx.drawRoundedShape?.(getRiverPoly(river.bankHitbox.points), 0, true);
-                }
-                for (const river of rivers) {
-                    ctx.fill.color = COLORS.water.toNumber();
-                    ctx.drawRoundedShape?.(getRiverPoly(river.waterHitbox.points), 0, true);
-                }
-                // clip the river polygons
-                ctx.drawRect(0, 0, width * scale, height * scale);
-                ctx.beginHole();
-                ctx.drawRoundedShape?.(beach, radius);
-                ctx.endHole();
+            // river bank needs to be draw first
+            ctx.beginPath();
+            for (const river of rivers) {
+                ctx.roundShape(getRiverPoly(river.bankHitbox.points), 0, true);
             }
+            ctx.fill(COLORS.riverBank);
 
-            ctx.lineStyle({
+            ctx.beginPath();
+            for (const river of rivers) {
+                ctx.roundShape(getRiverPoly(river.waterHitbox.points), 0, true);
+            }
+            ctx.fill(COLORS.water);
+
+            ctx.beginPath();
+            ctx.rect(0, 0, width * scale, height * scale);
+            ctx.fill(COLORS.water);
+            ctx.roundShape(beach, radius);
+            ctx.cut();
+
+            ctx.setStrokeStyle({
                 color: 0x000000,
                 alpha: 0.1,
                 width: gridLineWidth
@@ -199,37 +206,40 @@ export class Minimap {
                 ctx.lineTo(gridWidth, y);
             }
 
-            ctx.endFill();
-            ctx.lineStyle();
+            ctx.stroke();
 
             for (const building of mapPacket.objects) {
                 if (building.type !== ObjectCategory.Building) continue;
 
                 const definition = building.definition;
                 if (definition.groundGraphics) {
-                    const drawGroundGraphics = (color: ColorSource, hitbox: Hitbox): void => {
+                    const drawGroundGraphics = (hitbox: Hitbox): void => {
                         // TODO Make this code prettier
-                        if (!(hitbox instanceof HitboxGroup)) ctx.beginFill(color);
                         if (hitbox instanceof RectangleHitbox) {
                             const width = hitbox.max.x - hitbox.min.x;
                             const height = hitbox.max.y - hitbox.min.y;
-                            ctx.drawRect(hitbox.min.x * scale, hitbox.min.y * scale, width * scale, height * scale);
+                            ctx.rect(hitbox.min.x * scale, hitbox.min.y * scale, width * scale, height * scale);
                         } else if (hitbox instanceof CircleHitbox) {
                             ctx.arc(hitbox.position.x * scale, hitbox.position.y * scale, hitbox.radius * scale, 0, Math.PI * 2);
                         } else if (hitbox instanceof PolygonHitbox) {
-                            ctx.drawPolygon(hitbox.points.map(v => Vec.scale(v, scale)));
+                            ctx.poly(hitbox.points.map(v => {
+                                const vec = Vec.scale(v, scale);
+                                return [vec.x, vec.y];
+                            }).flat());
                         } else if (hitbox instanceof HitboxGroup) {
                             for (const hitBox of hitbox.hitboxes) {
-                                drawGroundGraphics(color, hitBox);
+                                drawGroundGraphics(hitBox);
                             }
                         }
                         if (!(hitbox instanceof HitboxGroup)) {
                             ctx.closePath();
-                            ctx.endFill();
                         }
                     };
                     for (const ground of definition.groundGraphics) {
-                        drawGroundGraphics(ground.color, ground.hitbox.transform(building.position, 1, building.rotation as Orientation));
+                        ctx.beginPath();
+                        drawGroundGraphics(ground.hitbox.transform(building.position, 1, building.rotation as Orientation));
+                        ctx.closePath();
+                        ctx.fill(ground.color);
                     }
                 }
             }
@@ -244,12 +254,11 @@ export class Minimap {
         const realWidth = width * PIXI_SCALE;
         const realHeight = height * PIXI_SCALE;
 
-        terrainGraphics.beginFill(COLORS.border);
-        terrainGraphics.drawRect(-margin, -margin, realWidth + doubleMargin, margin);
-        terrainGraphics.drawRect(-margin, realHeight, realWidth + doubleMargin, margin);
-        terrainGraphics.drawRect(-margin, -margin, margin, realHeight + doubleMargin);
-        terrainGraphics.drawRect(realWidth, -margin, margin, realHeight + doubleMargin);
-        terrainGraphics.endFill();
+        terrainGraphics.rect(-margin, -margin, realWidth + doubleMargin, margin);
+        terrainGraphics.rect(-margin, realHeight, realWidth + doubleMargin, margin);
+        terrainGraphics.rect(-margin, -margin, margin, realHeight + doubleMargin);
+        terrainGraphics.rect(realWidth, -margin, margin, realHeight + doubleMargin);
+        terrainGraphics.fill(COLORS.border);
 
         this.game.camera.addObject(terrainGraphics);
 
@@ -262,7 +271,7 @@ export class Minimap {
                 case ObjectCategory.Obstacle: {
                     const definition = mapObject.definition;
 
-                    let texture = definition.frames?.base ?? definition.idString;
+                    let texture = definition.frames.base ?? definition.idString;
 
                     if (mapObject.variation !== undefined) texture += `_${mapObject.variation + 1}`;
 
@@ -274,14 +283,14 @@ export class Minimap {
                     image.scale.set((mapObject.scale ?? 1) * (1 / PIXI_SCALE));
 
                     mapRender.addChild(image);
-                }
                     break;
+                }
 
                 case ObjectCategory.Building: {
                     const definition = mapObject.definition;
                     const rotation = Angle.orientationToRotation(mapObject.rotation);
 
-                    for (const image of definition.floorImages ?? []) {
+                    for (const image of definition.floorImages) {
                         const sprite = new SuroiSprite(image.key)
                             .setVPos(Vec.addAdjust(mapObject.position, image.position, mapObject.rotation as Orientation))
                             .setRotation(rotation + (image.rotation ?? 0))
@@ -292,7 +301,7 @@ export class Minimap {
                         mapRender.addChild(sprite);
                     }
 
-                    for (const image of definition.ceilingImages ?? []) {
+                    for (const image of definition.ceilingImages) {
                         const sprite = new SuroiSprite(image.key)
                             .setVPos(Vec.addAdjust(mapObject.position, image.position, mapObject.rotation as Orientation))
                             .setRotation(rotation)
@@ -303,29 +312,28 @@ export class Minimap {
                         mapRender.addChild(sprite);
                     }
 
-                    for (const floor of definition.floors ?? []) {
+                    for (const floor of definition.floors) {
                         const hitbox = floor.hitbox.transform(mapObject.position, 1, mapObject.rotation as Orientation);
                         this.terrain.addFloor(floor.type, hitbox);
                     }
-                }
                     break;
+                }
             }
         }
 
         mapRender.sortChildren();
 
         // Render all obstacles and buildings to a texture
-        const renderTexture = RenderTexture.create({
+        this.texture?.destroy(true);
+        this.texture = RenderTexture.create({
             width,
             height,
             resolution: isMobile.any ? 1 : 2
         });
 
-        renderTexture.baseTexture.clearColor = COLORS.grass;
-
-        this.game.pixi.renderer.render(mapRender, { renderTexture });
+        this.game.pixi.renderer.render({ container: mapRender, target: this.texture, clearColor: COLORS.grass });
         this.sprite.texture.destroy(true);
-        this.sprite.texture = renderTexture;
+        this.sprite.texture = this.texture;
         mapRender.destroy({
             children: true,
             texture: false
@@ -335,18 +343,24 @@ export class Minimap {
         this.placesContainer.removeChildren();
         for (const place of mapPacket.places) {
             const text = new Text(
-                place.name,
                 {
-                    fill: "white",
-                    fontFamily: "Inter",
-                    fontWeight: "600",
-                    stroke: "black",
-                    strokeThickness: 2,
-                    fontSize: 18,
-                    dropShadow: true,
-                    dropShadowAlpha: 0.8,
-                    dropShadowColor: "black",
-                    dropShadowBlur: 2
+                    text: place.name,
+                    style: {
+                        fill: "white",
+                        fontFamily: "Inter",
+                        fontWeight: "600",
+                        stroke: {
+                            color: "black",
+                            width: 2
+                        },
+                        fontSize: 18,
+                        dropShadow: {
+                            alpha: 0.8,
+                            color: "black",
+                            blur: 2,
+                            distance: 5
+                        }
+                    }
                 }
             );
             text.alpha = 0.7;
@@ -374,25 +388,23 @@ export class Minimap {
                 drawHitbox(river.waterHitbox, FloorTypes.water.debugColor, debugGraphics);
                 drawHitbox(river.bankHitbox, FloorTypes.sand.debugColor, debugGraphics);
 
-                debugGraphics.lineStyle({
+                debugGraphics.setStrokeStyle({
                     width: 10,
                     color: 0
                 });
 
+                debugGraphics.beginPath();
                 debugGraphics.moveTo(points[0].x, points[0].y);
                 for (let i = 1; i < points.length; i++) {
                     const point = points[i];
                     debugGraphics.lineTo(point.x, point.y);
                 }
+                debugGraphics.stroke();
 
-                debugGraphics.endFill();
-
-                debugGraphics.lineStyle();
-                debugGraphics.fill.alpha = 1;
                 for (const point of points) {
-                    debugGraphics.beginFill(0xff0000);
+                    debugGraphics.beginPath();
                     debugGraphics.arc(point.x, point.y, 20, 0, Math.PI * 2);
-                    debugGraphics.endFill();
+                    debugGraphics.fill(0xff0000);
                 }
             }
 
@@ -403,26 +415,27 @@ export class Minimap {
     update(): void {
         if (this.pings.size > 0) {
             this.pingGraphics.clear();
-            this.pingGraphics.lineStyle({
-                color: 0x00ffff,
-                width: 5,
-                cap: LINE_CAP.ROUND
-            });
-
             const now = Date.now();
+
             for (const ping of this.pings) {
-                if (!ping.initialized) {
-                    this.pingsContainer.addChild(ping.image);
-                    ping.initialized = true;
-                }
                 const radius = Numeric.lerp(0, 2048, (now - ping.startTime) / 7000);
-                if (radius >= 2048) {
+
+                if (now > ping.endTime) {
                     this.pings.delete(ping);
-                    this.game.addTimeout(() => { ping.image.destroy(); }, 5000);
+                    ping.destroy();
                     continue;
                 }
+
+                if (radius >= 2048) continue;
+
+                this.pingGraphics.setStrokeStyle({
+                    color: ping.color,
+                    width: 5,
+                    cap: "round"
+                });
+
                 this.pingGraphics.arc(ping.position.x, ping.position.y, radius, 0, Math.PI * 2);
-                this.pingGraphics.endFill();
+                this.pingGraphics.stroke();
             }
         }
 
@@ -444,23 +457,30 @@ export class Minimap {
 
         this.gasGraphics.clear();
 
-        this.gasGraphics.lineStyle({
+        this.gasGraphics.beginPath();
+        this.gasGraphics.setStrokeStyle({
             color: 0x00f9f9,
             width: 2,
-            cap: LINE_CAP.ROUND
+            cap: "round"
         });
-
+        // draw line from player to gas center
         this.gasGraphics.moveTo(this.position.x, this.position.y)
-            .lineTo(this.gasPos.x, this.gasPos.y);
+            .lineTo(this.gasPos.x, this.gasPos.y)
+            .closePath().stroke();
 
-        this.gasGraphics.endFill();
-
-        this.gasGraphics.line.color = 0xffffff;
-        this.gasGraphics.arc(this.gasPos.x, this.gasPos.y, this.gasRadius, 0, Math.PI * 2);
-        this.gasGraphics.endFill();
+        // draw circle
+        this.gasGraphics.beginPath()
+            .setStrokeStyle({
+                color: 0xffffff,
+                width: 2,
+                cap: "round"
+            })
+            .arc(this.gasPos.x, this.gasPos.y, this.gasRadius, 0, Math.PI * 2)
+            .closePath()
+            .stroke();
     }
 
-    borderContainer = $("#minimap-border");
+    private readonly _borderContainer = $("#minimap-border");
 
     resize(): void {
         this.border.visible = this.expanded;
@@ -483,20 +503,23 @@ export class Minimap {
             ) / uiScale;
             closeButton.css("left", `${closeButtonPos}px`);
 
-            this.indicator.scale.set(0.2);
-
             this.border.clear();
-            this.border.fill.alpha = 0;
-            this.border.lineStyle({
+            this.border.setStrokeStyle({
                 width: 4,
                 color: 0x00000
             });
-            this.border.drawRect(-this.sprite.width / 2, 0, this.sprite.width, this.sprite.height);
+            this.border.rect(-this.sprite.width / 2, 0, this.sprite.width, this.sprite.height);
+            this.border.stroke();
+
+            this.indicator.scale.set(1);
+            for (const [, indicator] of this.teammateIndicators) {
+                indicator.setScale(1);
+            }
         } else {
             if (!this.visible) return;
 
-            const bounds = this.borderContainer[0].getBoundingClientRect();
-            const border = parseInt(this.borderContainer.css("border-width")) * uiScale;
+            const bounds = this._borderContainer[0].getBoundingClientRect();
+            const border = parseInt(this._borderContainer.css("border-width")) * uiScale;
 
             this.minimapWidth = bounds.width - border * 2;
             this.minimapHeight = bounds.height - border * 2;
@@ -508,12 +531,16 @@ export class Minimap {
                 this.container.scale.set(1 / 2 * uiScale);
             }
 
-            this.indicator.scale.set(0.1);
+            this.indicator.scale.set(0.75);
+            for (const [, indicator] of this.teammateIndicators) {
+                indicator.setScale(0.75);
+            }
         }
 
         this.mask.clear();
-        this.mask.beginFill(0);
-        this.mask.drawRect(this.margins.x, this.margins.y, this.minimapWidth, this.minimapHeight);
+        this.mask.rect(this.margins.x, this.margins.y, this.minimapWidth, this.minimapHeight);
+        this.mask.fill();
+
         this.updatePosition();
         this.updateTransparency();
 
@@ -550,7 +577,7 @@ export class Minimap {
     switchToBigMap(): void {
         this.expanded = true;
         this.container.visible = true;
-        this.borderContainer.hide();
+        this._borderContainer.hide();
         $("#scopes-container").hide();
         $("#spectating-container").hide();
         $("#gas-msg-info").hide();
@@ -575,37 +602,115 @@ export class Minimap {
             this.container.visible = false;
             return;
         }
-        this.borderContainer.show();
+        this._borderContainer.show();
         this.resize();
     }
 
     updateTransparency(): void {
-        this.container.alpha = this.game.console.getBuiltInCVar(this.expanded ? "cv_map_transparency" : "cv_minimap_transparency");
+        this.container.alpha = this.game.console.getBuiltInCVar(
+            this.expanded
+                ? "cv_map_transparency"
+                : "cv_minimap_transparency"
+        );
     }
 
-    toggleMinimap(noSwitchToggle = false): void {
+    toggleMinimap(): void {
         this.visible = !this.visible;
 
         this.switchToSmallMap();
         this.container.visible = this.visible;
-        this.borderContainer.toggle(this.visible);
-        this.game.console.setBuiltInCVar("cv_minimap_minimized", !this.visible);
-        if (!noSwitchToggle) {
-            $("#toggle-hide-minimap").prop("checked", !this.visible);
+        this._borderContainer.toggle(this.visible);
+    }
+
+    addMapPing(position: Vector, definition: MapPingDefinition, playerId?: number): void {
+        const ping = new MapPing(position, definition, playerId ? this.game.objects.get(playerId) as Player : undefined);
+        if (definition.sound) this.game.soundManager.play(definition.sound);
+
+        this.pingsContainer.addChild(ping.mapImage);
+        if (ping.inGameImage) this.game.camera.addObject(ping.inGameImage);
+
+        // delete previous pings from the same player
+        if (ping.definition.isPlayerPing) {
+            for (const otherPing of this.pings) {
+                if (
+                    otherPing.definition.idString === ping.definition.idString &&
+                    otherPing.player?.id === playerId
+                ) {
+                    otherPing.destroy();
+                    this.pings.delete(otherPing);
+                }
+            }
+        }
+        this.pings.add(ping);
+        if (ping.definition.ignoreExpiration !== true) {
+            this.game.addTimeout(() => {
+                ping.destroy();
+            }, 10000);
         }
     }
 }
 
-export class Ping {
+export class MapPing {
     position: Vector;
     startTime: number;
-    image: SuroiSprite;
-    initialized: boolean;
+    endTime: number;
+    mapImage: SuroiSprite;
+    inGameImage?: SuroiSprite;
+    definition: MapPingDefinition;
+    player?: Player;
+    color: ColorSource;
 
-    constructor(position: Vector) {
+    constructor(position: Vector, definition: MapPingDefinition, player?: Player) {
         this.position = position;
+        this.definition = definition;
+        this.player = player;
         this.startTime = Date.now();
-        this.image = new SuroiSprite("airdrop_ping").setVPos(position);
-        this.initialized = false;
+        this.endTime = this.startTime + (this.definition.lifetime * 1000);
+
+        this.color = definition.color;
+
+        if (definition.isPlayerPing && player) {
+            this.color = TEAMMATE_COLORS[
+                Math.max(player.game.uiManager.teammates.findIndex(p => p.id === player.id) + 1, 0)
+            ];
+        }
+
+        this.mapImage = new SuroiSprite(definition.idString)
+            .setVPos(position)
+            .setTint(this.color)
+            .setScale(0.5);
+
+        this.mapImage.filters = new DropShadowFilter({
+            blur: 1,
+            quality: 3,
+            alpha: 1,
+            color: 0,
+            offset: {
+                x: 0,
+                y: 0
+            }
+        });
+
+        if (this.definition.showInGame) {
+            this.inGameImage = new SuroiSprite(definition.idString)
+                .setVPos(toPixiCoords(position))
+                .setTint(this.color)
+                .setZIndex(ZIndexes.Emotes);
+            this.inGameImage.filters = new DropShadowFilter({
+                blur: 1,
+                quality: 3,
+                alpha: 0.5,
+                color: 0,
+                offset: {
+                    x: 0,
+                    y: 0
+                }
+            });
+        }
+    }
+
+    destroy(): void {
+        this.mapImage.destroy();
+        this.inGameImage?.destroy();
     }
 }

@@ -11,8 +11,8 @@ import { Vec } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { HITBOX_COLORS, HITBOX_DEBUG_MODE } from "../utils/constants";
 import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
-import { type GameSound } from "../utils/soundManager";
-import { Tween } from "../utils/tween";
+import { type GameSound } from "../managers/soundManager";
+import { type Tween } from "../utils/tween";
 import { GameObject } from "./gameObject";
 
 export class Building extends GameObject<ObjectCategory.Building> {
@@ -146,16 +146,15 @@ export class Building extends GameObject<ObjectCategory.Building> {
         this.ceilingVisible = visible;
 
         this.ceilingTween?.kill();
-
-        this.ceilingTween = new Tween(
-            this.game,
-            {
-                target: this.ceilingContainer,
-                to: { alpha: visible ? 0 : 1 },
-                duration: visible ? 150 : 300,
-                ease: EaseFunctions.sineOut
+        this.ceilingTween = this.game.addTween({
+            target: this.ceilingContainer,
+            to: { alpha: visible ? 0 : 1 },
+            duration: visible ? 150 : 300,
+            ease: EaseFunctions.sineOut,
+            onComplete: () => {
+                this.ceilingTween = undefined;
             }
-        );
+        });
     }
 
     override updateFromData(data: ObjectsNetData[ObjectCategory.Building], isNew = false): void {
@@ -164,7 +163,7 @@ export class Building extends GameObject<ObjectCategory.Building> {
             this.definition = full.definition;
             this.position = full.position;
 
-            for (const image of this.definition.floorImages ?? []) {
+            for (const image of this.definition.floorImages) {
                 const sprite = new SuroiSprite(image.key);
                 sprite.setVPos(toPixiCoords(image.position));
                 if (image.tint !== undefined) sprite.setTint(image.tint);

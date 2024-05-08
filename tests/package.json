@@ -5,21 +5,19 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "validateDefinitions": "node dist/tests/src/validateDefinitions.js",
+    "validateDefinitions": "node dist/tests/src/validateDefinitions.js -print-top -print-bottom",
     "stressTest": "tsc && node --enable-source-maps dist/tests/src/stressTest.js"
-  },
-  "engines": {
-    "node": ">=18.8.0"
   },
   "keywords": [],
   "license": "GPL-3.0",
   "devDependencies": {
-    "@types/node": "^20.11.19",
+    "@types/node": "^20.12.6",
     "@types/ws": "^8.5.10",
-    "typescript": "5.3.3"
+    "typescript": "^5.4.4"
   },
   "dependencies": {
     "@damienvesper/bit-buffer": "^1.0.1",
+    "nanotimer": "^0.3.15",
     "ws": "^8.16.0"
   }
 }

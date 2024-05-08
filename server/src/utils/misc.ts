@@ -4,13 +4,6 @@ import { type ObjectDefinition, type ReferenceTo } from "../../../common/src/uti
 import { weightedRandom } from "../../../common/src/utils/random";
 import { LootTiers, type WeightedItem } from "../data/lootTables";
 
-export class LootItem {
-    constructor(
-        public readonly idString: ReferenceTo<LootDefinition>,
-        public readonly count: number
-    ) {}
-}
-
 export const Logger = {
     log(...message: string[]): void {
         internalLog(message.join(" "));
@@ -27,6 +20,13 @@ function internalLog(...message: string[]): void {
         styleText(`[${date.toLocaleDateString("en-US")} ${date.toLocaleTimeString("en-US")}]`, ColorStyles.foreground.green.bright),
         message.join(" ")
     );
+}
+
+export class LootItem {
+    constructor(
+        public readonly idString: ReferenceTo<LootDefinition>,
+        public readonly count: number
+    ) {}
 }
 
 export function getLootTableLoot(loots: WeightedItem[]): LootItem[] {
@@ -48,25 +48,27 @@ export function getLootTableLoot(loots: WeightedItem[]): LootItem[] {
     for (const selection of [selectedItem].flat()) {
         if ("tier" in selection) {
             loot = loot.concat(getLootTableLoot(LootTiers[selection.tier]));
-        } else {
-            const item = selection.item;
-            if (item === null) continue;
-            loot.push(new LootItem(item, selection.spawnSeparately ? 1 : (selection.count ?? 1)));
+            continue;
+        }
 
-            const definition = Loots.fromString(item);
-            if (definition === undefined) {
-                throw new Error(`Unknown loot item: ${item}`);
-            }
+        const item = selection.item;
+        if (item === null) continue;
+        loot.push(new LootItem(item, selection.spawnSeparately ? 1 : (selection.count ?? 1)));
 
-            if ("ammoSpawnAmount" in definition && "ammoType" in definition && definition.ammoSpawnAmount) {
-                if (definition.ammoSpawnAmount > 1) {
-                    loot.push(
-                        new LootItem(definition.ammoType, definition.ammoSpawnAmount / 2),
-                        new LootItem(definition.ammoType, definition.ammoSpawnAmount / 2)
-                    );
-                } else {
-                    loot.push(new LootItem(definition.ammoType, definition.ammoSpawnAmount));
-                }
+        const definition = Loots.fromStringSafe(item);
+        if (definition === undefined) {
+            throw new ReferenceError(`Unknown loot item: ${item}`);
+        }
+
+        if ("ammoType" in definition && definition.ammoSpawnAmount) {
+            const ammoSpawnAmount = definition.ammoSpawnAmount;
+            if (ammoSpawnAmount > 1) {
+                loot.push(
+                    new LootItem(definition.ammoType, Math.floor(ammoSpawnAmount / 2)),
+                    new LootItem(definition.ammoType, Math.ceil(ammoSpawnAmount / 2))
+                );
+            } else {
+                loot.push(new LootItem(definition.ammoType, ammoSpawnAmount));
             }
         }
     }

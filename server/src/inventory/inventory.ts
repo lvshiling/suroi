@@ -1,17 +1,16 @@
 import { DEFAULT_INVENTORY, GameConstants } from "../../../common/src/constants";
 import { Ammos, type AmmoDefinition } from "../../../common/src/definitions/ammos";
-import { type ArmorDefinition } from "../../../common/src/definitions/armors";
+import { ArmorType, type ArmorDefinition } from "../../../common/src/definitions/armors";
 import { type BackpackDefinition } from "../../../common/src/definitions/backpacks";
 import { type DualGunNarrowing, type GunDefinition } from "../../../common/src/definitions/guns";
 import { HealType, HealingItems, type HealingItemDefinition } from "../../../common/src/definitions/healingItems";
 import { Loots, type LootDefinition, type WeaponDefinition } from "../../../common/src/definitions/loots";
-import { Scopes, type ScopeDefinition } from "../../../common/src/definitions/scopes";
+import { DEFAULT_SCOPE, Scopes, type ScopeDefinition } from "../../../common/src/definitions/scopes";
 import { Throwables, type ThrowableDefinition } from "../../../common/src/definitions/throwables";
 import { Numeric } from "../../../common/src/utils/math";
 import { type Timeout } from "../../../common/src/utils/misc";
 import { ItemType, type ReferenceTo, type ReifiableDef } from "../../../common/src/utils/objectDefinitions";
 import { type Vector } from "../../../common/src/utils/vector";
-import { type Game } from "../game";
 import { type Player } from "../objects/player";
 import { HealingAction } from "./action";
 import { GunItem } from "./gunItem";
@@ -134,9 +133,6 @@ export class Inventory {
         if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to set active index to invalid slot '${slot}'`);
         if (!this.hasWeapon(slot) || slot === this._activeWeaponIndex) return false;
 
-        // todo switch penalties, other stuff that should happen when switching items
-        // (started)
-
         const old = this._activeWeaponIndex;
         this._activeWeaponIndex = slot;
 
@@ -187,7 +183,7 @@ export class Inventory {
         owner.attacking = false;
         owner.recoil.active = false;
         owner.dirty.weapons = true;
-        owner.game.fullDirtyObjects.add(this.owner);
+        this.owner.setDirty();
 
         owner.updateAndApplyModifiers();
 
@@ -287,7 +283,7 @@ export class Inventory {
      */
     addOrReplaceWeapon(slot: number, item: ReifiableItem): void {
         if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to set item in invalid slot '${slot}'`);
-        this.owner.game.fullDirtyObjects.add(this.owner);
+        this.owner.setDirty();
 
         /**
          * `dropWeapon` changes the active item index to something potentially undesirable,
@@ -340,7 +336,7 @@ export class Inventory {
         return -1;
     }
 
-    private _dropItem(toDrop: Parameters<Game["addLoot"]>[0], options?: { readonly position?: Vector, readonly count?: number, readonly pushForce?: number }): void {
+    private _dropItem(toDrop: ReifiableDef<LootDefinition>, options?: { readonly position?: Vector, readonly count?: number, readonly pushForce?: number }): void {
         this.owner.game
             .addLoot(toDrop, options?.position ?? this.owner.position, options?.count ?? 1)
             .push(this.owner.rotation, options?.pushForce ?? -0.03);
@@ -442,11 +438,86 @@ export class Inventory {
             }
         }
 
-        this.owner.game.fullDirtyObjects.add(this.owner);
+        this.owner.setDirty();
         this.owner.dirty.items = true;
         this.owner.dirty.weapons = true;
 
         return item;
+    }
+
+    /**
+     * Attempts to drop a item with given `idString`
+     * @param itemString The `idString` of the item;
+     */
+    dropItem(itemString: ReifiableDef<LootDefinition>, pushForce = -0.03): void {
+        const definition = Loots.reify(itemString);
+        const { idString } = definition;
+
+        if (
+            (
+                !this.items.hasItem(idString) &&
+                definition.itemType !== ItemType.Armor &&
+                definition.itemType !== ItemType.Backpack
+            ) ||
+            definition.noDrop
+        ) return;
+
+        switch (definition.itemType) {
+            case ItemType.Healing:
+            case ItemType.Ammo: {
+                const itemAmount = this.items.getItem(idString);
+                const removalAmount = Math.min(itemAmount, Math.ceil(itemAmount / 2));
+
+                this._dropItem(definition, { pushForce, count: removalAmount });
+                this.items.decrementItem(idString, removalAmount);
+                break;
+            }
+            case ItemType.Scope: {
+                this._dropItem(definition, { pushForce });
+                this.items.setItem(idString, 0);
+
+                if (this.scope.idString !== idString) break;
+
+                // Switch to next highest scope
+                for (let i = Scopes.definitions.length - 1; i >= 0; i--) {
+                    const scope = Scopes.definitions[i];
+                    if (this.items.hasItem(scope.idString)) {
+                        this.scope = scope;
+                        this.owner.effectiveScope = this.owner.isInsideBuilding
+                            ? DEFAULT_SCOPE
+                            : this.scope;
+                        break;
+                    }
+                }
+                break;
+            }
+            case ItemType.Throwable: {
+                this.removeThrowable(definition, true);
+                break;
+            }
+            case ItemType.Armor: {
+                switch (definition.armorType) {
+                    case ArmorType.Helmet: {
+                        if (!this.helmet) return;
+                        this.helmet = undefined;
+                        break;
+                    }
+                    case ArmorType.Vest: {
+                        if (!this.vest) return;
+                        this.vest = undefined;
+                        break;
+                    }
+                }
+                this._dropItem(definition, { pushForce });
+                break;
+            }
+            case ItemType.Backpack: {
+                return;
+            }
+        }
+
+        this.owner.setDirty();
+        this.owner.dirty.items = true;
     }
 
     /**
@@ -556,7 +627,7 @@ export class Inventory {
      * Attempts to use a consumable item or a scope with the given `idString`
      * @param itemString The `idString` of the consumable or scope to use
      */
-    useItem(itemString: ReifiableDef<HealingItemDefinition | ScopeDefinition | ThrowableDefinition>): void {
+    useItem(itemString: ReifiableDef<HealingItemDefinition | ScopeDefinition | ThrowableDefinition | ArmorDefinition | AmmoDefinition | BackpackDefinition | AmmoDefinition>): void {
         const definition = Loots.reify(itemString);
         const idString = definition.idString;
 
@@ -585,7 +656,7 @@ export class Inventory {
             }
             case ItemType.Throwable: {
                 this.throwable = idString;
-                this.owner.game.fullDirtyObjects.add(this.owner);
+                this.owner.setDirty();
                 this.owner.dirty.weapons = true;
                 const slot = this.slotsByItemType[ItemType.Throwable]?.[0];
                 // Let's hope there's only one throwable slot…

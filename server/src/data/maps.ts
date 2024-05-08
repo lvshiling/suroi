@@ -1,21 +1,18 @@
 import { type WebSocket } from "uWebSockets.js";
 import { Buildings, type BuildingDefinition } from "../../../common/src/definitions/buildings";
-import { Guns } from "../../../common/src/definitions/guns";
 import { Loots } from "../../../common/src/definitions/loots";
 import { Obstacles, type ObstacleDefinition } from "../../../common/src/definitions/obstacles";
-import { Skins } from "../../../common/src/definitions/skins";
 import { type Variation } from "../../../common/src/typings";
 import { Collision } from "../../../common/src/utils/math";
 import { ItemType, type ReferenceTo } from "../../../common/src/utils/objectDefinitions";
-import { pickRandomInArray, random } from "../../../common/src/utils/random";
+import { random } from "../../../common/src/utils/random";
 import { Vec, type Vector } from "../../../common/src/utils/vector";
 import { type GunItem } from "../inventory/gunItem";
 import { type Map } from "../map";
-import { Player } from "../objects/player";
-import { type PlayerContainer } from "../server";
+import { Player, type PlayerContainer } from "../objects/player";
 import { type LootTables } from "./lootTables";
 
-interface MapDefinition {
+export interface MapDefinition {
     readonly width: number
     readonly height: number
     readonly oceanSize: number
@@ -31,7 +28,9 @@ interface MapDefinition {
     }
 
     readonly bridges?: Array<ReferenceTo<BuildingDefinition>>
+    readonly majorBuildings?: Array<ReferenceTo<BuildingDefinition>>
     readonly buildings?: Record<ReferenceTo<BuildingDefinition>, number>
+    readonly quadBuildingLimit?: Record<ReferenceTo<BuildingDefinition>, number>
     readonly obstacles?: Record<ReferenceTo<ObstacleDefinition>, number>
     readonly loots?: Record<keyof typeof LootTables, number>
 
@@ -44,7 +43,7 @@ interface MapDefinition {
     readonly genCallback?: (map: Map) => void
 }
 
-export const Maps: Record<string, MapDefinition> = {
+const maps = {
     main: {
         width: 1632,
         height: 1632,
@@ -59,39 +58,46 @@ export const Maps: Record<string, MapDefinition> = {
             minWideWidth: 25,
             maxWideWidth: 30
         },
-        bridges: [
-            "small_bridge"
-        ],
+        bridges: ["small_bridge"],
+        majorBuildings: ["armory", "port_complex", "refinery"],
         buildings: {
             port_complex: 1,
             sea_traffic_control: 1,
-            tugboat_white: 5,
             tugboat_red: 1,
+            tugboat_white: 5,
             armory: 1,
             refinery: 1,
             warehouse: 5,
-            small_house: 6,
+            red_house: 6,
+            green_house: 2,
             mobile_home: 9,
             porta_potty: 12,
-            container_3: 1,
+            container_3: 2,
             container_4: 2,
-            container_5: 1,
+            container_5: 2,
             container_6: 2,
             container_7: 1,
             container_8: 2,
             container_9: 1,
             container_10: 2
         },
+        quadBuildingLimit: {
+            red_house: 2,
+            warehouse: 2,
+            green_house: 1,
+            mobile_home: 3,
+            porta_potty: 3
+        },
         obstacles: {
-            oil_tank: 10,
+            oil_tank: 12,
             // christmas_tree: 1, // winter mode
             oak_tree: 250,
             birch_tree: 25,
             pine_tree: 15,
-            regular_crate: 150,
+            regular_crate: 160,
             flint_crate: 5,
             aegis_crate: 5,
-            grenade_crate: 40,
+            grenade_crate: 35,
             rock: 150,
             river_chest: 1,
             river_rock: 45,
@@ -122,7 +128,7 @@ export const Maps: Record<string, MapDefinition> = {
         height: 1620,
         oceanSize: 128,
         beachSize: 32,
-        genCallback: (map: Map) => {
+        genCallback: (map) => {
             // Generate all buildings
 
             const buildingPos = Vec.create(200, map.height - 600);
@@ -193,7 +199,7 @@ export const Maps: Record<string, MapDefinition> = {
         buildings: {
             refinery: 1,
             warehouse: 4,
-            small_house: 5,
+            red_house: 5,
             porta_potty: 10,
             container_3: 1,
             container_4: 1,
@@ -238,7 +244,7 @@ export const Maps: Record<string, MapDefinition> = {
         height: 512,
         beachSize: 16,
         oceanSize: 40,
-        genCallback: (map: Map) => {
+        genCallback: (map) => {
             // Function to generate all game loot items
             const genLoots = (pos: Vector, yOff: number, xOff: number): void => {
                 const width = 70;
@@ -261,8 +267,8 @@ export const Maps: Record<string, MapDefinition> = {
 
                 for (const item of Loots.definitions) {
                     if (
-                        ((item.itemType === ItemType.Melee || item.itemType === ItemType.Scope) && item.noDrop === true) ||
-                        "ephemeral" in item ||
+                        ((item.itemType === ItemType.Melee || item.itemType === ItemType.Scope) && item.noDrop) ||
+                        ("ephemeral" in item && item.ephemeral) ||
                         (item.itemType === ItemType.Backpack && item.level === 0) ||
                         item.itemType === ItemType.Skin
                     ) continue;
@@ -343,10 +349,12 @@ export const Maps: Record<string, MapDefinition> = {
         width: 1024,
         height: 1024,
         beachSize: 32,
-        oceanSize: 32,
+        oceanSize: 64,
         genCallback(map) {
-            //map.game.grid.addObject(new Decal(map.game, "sea_traffic_control_decal", Vec.create(this.width / 2, this.height / 2), 0));
-            map.generateBuilding("oil_tanker_ship", Vec.create(this.width / 2, this.height / 2), 0);
+            // map.game.grid.addObject(new Decal(map.game, "sea_traffic_control_decal", Vec.create(this.width / 2, this.height / 2), 0));
+            map.generateBuilding("armory", Vec.create(this.width / 2, this.height / 2), 0);
+            map.game.addLoot("steelfang", Vec.create(this.width / 2, this.height / 2 - 10));
+            map.game.addLoot("tactical_pack", Vec.create(this.width / 2, this.height / 2 - 10));
         }
     },
     singleObstacle: {
@@ -355,7 +363,7 @@ export const Maps: Record<string, MapDefinition> = {
         beachSize: 8,
         oceanSize: 8,
         genCallback(map) {
-            map.generateObstacle("control_panel", Vec.create(this.width / 2, this.height / 2), 0);
+            map.generateObstacle("bunker_entrance_door", Vec.create(this.width / 2, this.height / 2), 0);
         }
     },
     singleGun: {
@@ -368,26 +376,35 @@ export const Maps: Record<string, MapDefinition> = {
             map.game.addLoot("9mm", Vec.create(this.width / 2, this.height / 2 - 10), Infinity);
         }
     },
-    gunsTest: {
-        width: 64,
-        height: 48 + (16 * Guns.length),
-        beachSize: 8,
-        oceanSize: 8,
-        genCallback(map) {
-            for (let i = 0; i < Guns.length; i++) {
-                const player = new Player(map.game, { getUserData: () => { return {}; } } as unknown as WebSocket<PlayerContainer>, Vec.create(32, 32 + (16 * i)));
-                const gun = Guns[i];
-                player.inventory.addOrReplaceWeapon(0, gun.idString);
-                (player.inventory.getWeapon(0) as GunItem).ammo = gun.capacity;
-                player.inventory.items.setItem(gun.ammoType, Infinity);
-                player.disableInvulnerability();
-                // setInterval(() => player.activeItem.useItem(), 30);
-                map.game.addLoot(gun.idString, Vec.create(16, 32 + (16 * i)));
-                map.game.addLoot(gun.ammoType, Vec.create(16, 32 + (16 * i)), Infinity);
-                map.game.grid.addObject(player);
+    gunsTest: (() => {
+        const Guns = Loots.byType(ItemType.Gun);
+
+        return {
+            width: 64,
+            height: 48 + (16 * Guns.length),
+            beachSize: 8,
+            oceanSize: 8,
+            genCallback(map) {
+                for (let i = 0, l = Guns.length; i < l; i++) {
+                    const player = new Player(
+                        map.game,
+                        { getUserData: () => { return {}; } } as unknown as WebSocket<PlayerContainer>,
+                        Vec.create(32, 32 + (16 * i))
+                    );
+                    const gun = Guns[i];
+
+                    player.inventory.addOrReplaceWeapon(0, gun.idString);
+                    (player.inventory.getWeapon(0) as GunItem).ammo = gun.capacity;
+                    player.inventory.items.setItem(gun.ammoType, Infinity);
+                    player.disableInvulnerability();
+                    // setInterval(() => player.activeItem.useItem(), 30);
+                    map.game.addLoot(gun.idString, Vec.create(16, 32 + (16 * i)));
+                    map.game.addLoot(gun.ammoType, Vec.create(16, 32 + (16 * i)), Infinity);
+                    map.game.grid.addObject(player);
+                }
             }
-        }
-    },
+        };
+    })(),
     obstaclesTest: {
         width: 128,
         height: 48 + (32 * Obstacles.definitions.length),
@@ -409,10 +426,10 @@ export const Maps: Record<string, MapDefinition> = {
         genCallback(map) {
             for (let x = 0; x < 256; x += 16) {
                 for (let y = 0; y < 256; y += 16) {
-                    const player = new Player(map.game, { getUserData: () => { return {}; } } as unknown as WebSocket<PlayerContainer>, Vec.create(x, y));
+                    /*const player = new Player(map.game, { getUserData: () => { return {}; } } as unknown as WebSocket<PlayerContainer>, Vec.create(x, y));
                     player.disableInvulnerability();
                     player.loadout.skin = pickRandomInArray(Skins.definitions);
-                    map.game.grid.addObject(player);
+                    map.game.grid.addObject(player);*/
                     if (random(0, 1) === 1) map.generateObstacle("barrel", Vec.create(x, y));
                 }
             }
@@ -466,4 +483,6 @@ export const Maps: Record<string, MapDefinition> = {
             barrel: 15
         }
     }
-};
+} satisfies Record<string, MapDefinition>;
+
+export const Maps: Record<keyof typeof maps, MapDefinition> = maps;

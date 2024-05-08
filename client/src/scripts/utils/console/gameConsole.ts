@@ -5,6 +5,7 @@ import { type Game } from "../../game";
 import { type Command } from "./commands";
 import { defaultBinds, defaultClientCVars, type CVarTypeMapping } from "./defaultClientCVars";
 import { Casters, ConVar, ConsoleVariables, flagBitfieldToInterface } from "./variables";
+import { sanitizeHTML } from "../misc";
 
 /*
     eslint-disable
@@ -48,9 +49,19 @@ export interface GameSettings {
     readonly binds: Record<string, string[]>
 }
 
+/**
+ * Error type indicating that a console query has invalid syntax
+ */
+export class CommandSyntaxError extends SyntaxError { }
+
 // When opening the console with a key, the key will be typed to the console,
 // because the keypress event is triggered for the input field, but only on the main menu screen
 let invalidateNextCharacter = false;
+
+// goofy infinite loop prevention for resizes
+let noWidthAdjust = false;
+let noHeightAdjust = false;
+
 export class GameConsole {
     private _isOpen = false;
     get isOpen(): boolean { return this._isOpen; }
@@ -81,6 +92,7 @@ export class GameConsole {
         let width = NaN;
         let height = NaN;
         const T = this;
+        let set: ConsoleVariables["set"]["builtIn"] | undefined;
 
         return {
             get width() { return width; },
@@ -91,14 +103,7 @@ export class GameConsole {
                     window.innerWidth - (Number.isNaN(T._position?.left ?? NaN) ? -Infinity : T._position.left)
                 );
 
-                if (width !== w) {
-                    T.variables.set.builtIn("cv_console_width", width = w);
-
-                    if (!T._ui.container[0].style.width) {
-                        T._ui.container.css("width", width);
-                    }
-                    T._ui.autocomplete.css("width", width);
-                }
+                (set ??= T.variables.set.builtIn)("cv_console_width", width = w);
             },
 
             get height() { return height; },
@@ -109,14 +114,7 @@ export class GameConsole {
                     window.innerHeight - (Number.isNaN(T._position?.top ?? NaN) ? -Infinity : T._position.top)
                 );
 
-                if (height !== h) {
-                    T.variables.set.builtIn("cv_console_height", height = h);
-
-                    if (!T._ui.container[0].style.height) {
-                        T._ui.container.css("height", height);
-                    }
-                    T._ui.autocomplete.css("top", T._position.top + height);
-                }
+                (set ??= T.variables.set.builtIn)("cv_console_height", height = h);
             }
         };
     })();
@@ -127,6 +125,8 @@ export class GameConsole {
 
         const magicalPadding /* that prevents scroll bars from showing up */ = 1;
         const T = this;
+        let set: ConsoleVariables["set"]["builtIn"] | undefined;
+        const { container, autocomplete } = this._ui;
 
         return {
             get left() { return left; },
@@ -138,9 +138,9 @@ export class GameConsole {
                 );
 
                 if (left !== l) {
-                    T.variables.set.builtIn("cv_console_left", left = l);
-                    T._ui.container.css("left", left);
-                    T._ui.autocomplete.css("left", left);
+                    (set ??= T.variables.set.builtIn)("cv_console_left", left = l);
+                    container.css("left", left);
+                    autocomplete.css("left", left);
                 }
             },
 
@@ -153,9 +153,9 @@ export class GameConsole {
                 );
 
                 if (top !== t) {
-                    T.variables.set.builtIn("cv_console_top", top = t);
-                    T._ui.container.css("top", top);
-                    T._ui.autocomplete.css("top", top + T._dimensions.height);
+                    (set ??= T.variables.set.builtIn)("cv_console_top", top = t);
+                    container.css("top", top);
+                    autocomplete.css("top", top + T._dimensions.height);
                 }
             }
         };
@@ -184,6 +184,10 @@ export class GameConsole {
         filter(predicate: (value: T, index: number) => boolean): T[];
         filter<U extends T>(predicate: (value: T, index: number) => value is U): U[] {
             return this._backingArray.filter(predicate);
+        }
+
+        all(): T[] {
+            return this._backingArray;
         }
     })<string>();
 
@@ -216,32 +220,33 @@ export class GameConsole {
 
                 if (name in defaultClientCVars) {
                     this.variables.set.builtIn(name as keyof CVarTypeMapping, value as string, false);
-                } else {
-                    rewriteToLS = true;
-
-                    if (!name.match(/^uv_[a-zA-Z0-9_]+$/)) {
-                        const message = `Malformed CVar '${name}' found (this was either forced into local storage manually or is an old CVar that no longer exists). It will not be registered and will be deleted.`;
-
-                        console.warn(message);
-                        this.warn(message);
-                        continue;
-                    }
-
-                    this.variables.declareCVar(
-                        new ConVar(
-                            name,
-                            value,
-                            this,
-                            Casters.toString,
-                            {
-                                archive: true,
-                                cheat: false,
-                                readonly: false,
-                                ...(typeof variable === "object" ? flagBitfieldToInterface(variable?.flags ?? 0) : {})
-                            }
-                        )
-                    );
+                    continue;
                 }
+
+                rewriteToLS = true;
+
+                if (!name.match(/^uv_[a-zA-Z0-9_]+$/)) {
+                    const message = `Malformed CVar '${name}' found (this was either forced into local storage manually or is an old CVar that no longer exists). It will not be registered and will be deleted.`;
+
+                    console.warn(message);
+                    this.warn(message);
+                    continue;
+                }
+
+                this.variables.declareCVar(
+                    new ConVar(
+                        name,
+                        value,
+                        this,
+                        Casters.toString,
+                        {
+                            archive: true,
+                            cheat: false,
+                            readonly: false,
+                            ...(typeof variable === "object" ? flagBitfieldToInterface(variable?.flags ?? 0) : {})
+                        }
+                    )
+                );
             }
 
             if (config.binds) {
@@ -269,7 +274,6 @@ export class GameConsole {
             }
 
             for (const bind of bindList) {
-                if (bind === "") continue;
                 bindManager.addActionsToInput(bind, command);
             }
         }
@@ -448,13 +452,53 @@ export class GameConsole {
             if (err.filename) {
                 this.error(
                     {
-                        main: `Javascript ${err.error ? `'${Object.getPrototypeOf(err.error)?.constructor?.name}'` : "error"} occurred at ${err.filename.replace(location.origin + location.pathname, "./")}:${err.lineno}:${err.colno}`,
-                        detail: err.error
+                        main: `Javascript ${err.error ? `'${Object.getPrototypeOf(err.error)?.constructor?.name}'` : err.type} occurred at ${err.filename.replace(location.origin + location.pathname, "./")}:${err.lineno}:${err.colno}`,
+                        detail: err.error ?? err.message
                     },
                     true
                 );
+
+                console.error(err);
             }
         });
+
+        const addChangeListener = this.variables.addChangeListener.bind(this.variables);
+        addChangeListener(
+            "cv_console_left",
+            (game, value) => {
+                this._position.left = value;
+            }
+        );
+
+        addChangeListener(
+            "cv_console_top",
+            (game, value) => {
+                this._position.top = value;
+            }
+        );
+
+        const { container, autocomplete } = this._ui;
+        addChangeListener(
+            "cv_console_width",
+            (game, value) => {
+                if (!noWidthAdjust) {
+                    container.css("width", value);
+                }
+
+                autocomplete.css("width", value);
+            }
+        );
+
+        addChangeListener(
+            "cv_console_height",
+            (game, value) => {
+                if (!noHeightAdjust) {
+                    container.css("height", value);
+                }
+
+                autocomplete.css("top", this._position.top + value);
+            }
+        );
 
         this.isOpen = this._isOpen;
         // sanity check
@@ -515,8 +559,13 @@ export class GameConsole {
                 // With a left-to-right writing mode, inline is horizontal and block is vertical
                 // This might not work with languages where inline is vertical
 
+                noWidthAdjust = true;
                 this._dimensions.width = size.inlineSize;
+                noWidthAdjust = false;
+
+                noHeightAdjust = true;
                 this._dimensions.height = size.blockSize;
+                noHeightAdjust = false;
             }).observe(this._ui.container[0]);
         }
 
@@ -639,13 +688,44 @@ export class GameConsole {
             })()
         };
 
+    private _sanitizeRegExp(str: string): string {
+        return str.replace(/[[\](){}\\.+\-*!<>$|^?:]/g, r => `\\${r}`);
+    }
+
     private _updateAutocmp(): void {
         // todo autocomplete for command invocations
 
         const inputValue = this._ui.input.val() as string;
         const { autocomplete, input, container } = this._ui;
+        const primaryEntity = inputValue.split(" ")[0];
 
         const isEmpty = inputValue.length === 0;
+
+        const findMatches = (name: string): string[] => {
+            if (name.includes(inputValue)) return [inputValue];
+
+            const tokens = primaryEntity.split("_");
+            if (tokens.filter(s => s.length).length === 1) return [];
+
+            for (const token of tokens) {
+                const replaced = name.replace(
+                    new RegExp(
+                        `${this._sanitizeRegExp(`${token}_`)}|${this._sanitizeRegExp(`_${token}`)}`
+                    ),
+                    ""
+                );
+                if (replaced === name) {
+                    return [];
+                }
+
+                name = replaced;
+            }
+
+            return tokens;
+        };
+
+        const matches = (name: string): boolean => findMatches(name).length !== 0;
+        const cache = this._autocmpData.cache;
 
         const [
             historyCandidates,
@@ -654,32 +734,31 @@ export class GameConsole {
             variableCandidates
         ] = isEmpty
             ? [
-                this._history.filter(() => true),
+                this._history.all(),
                 [],
                 [],
                 []
             ]
             : [
-                this._history.filter(s => s.includes(inputValue) && !this._autocmpData.cache.commands.some(c => c === s)),
-                this._autocmpData.cache.commands.filter(s => s.includes(inputValue)),
-                this._autocmpData.cache.aliases.filter(s => s.includes(inputValue)),
-                this._autocmpData.cache.variables.filter(s => s.includes(inputValue))
+                this._history.filter(s => matches(s) && !cache.commands.some(c => c === s)),
+                cache.commands.filter(s => matches(s)),
+                cache.aliases.filter(s => matches(s)),
+                cache.variables.filter(s => matches(s))
             ];
 
-        const generateAutocompleteNode = (match: string, text: string): JQuery<HTMLDivElement> => {
-            const [before, after] = match
-                ? (() => {
-                    const indexOf = text.indexOf(match);
-
-                    return [text.substring(0, indexOf), text.substring(indexOf + match.length)];
-                })()
-                : [text, ""];
+        const generateAutocompleteNode = (text: string): JQuery<HTMLDivElement> => {
+            const matches = findMatches(text);
 
             const node = $<HTMLDivElement>("<div tabindex=\"0\" class=\"console-input-autocomplete-entry\"></div>")
                 .append(
-                    this._sanitizeHTML(before, { strict: true, escapeSpaces: true }),
-                    $(`<b>${this._sanitizeHTML(match, { strict: true, escapeSpaces: true })}</b>`),
-                    this._sanitizeHTML(after, { strict: true, escapeSpaces: true })
+                    sanitizeHTML(text, { strict: true, escapeSpaces: true })
+                        .replace(
+                            new RegExp(
+                                matches.map(m => this._sanitizeRegExp(m)).join("|"),
+                                "g"
+                            ),
+                            r => `<b>${sanitizeHTML(r, { strict: true, escapeSpaces: true })}</b>`
+                        )
                 );
 
             node.on("mousedown", ev => {
@@ -729,7 +808,7 @@ export class GameConsole {
                     candidates => {
                         const candidateNodes = candidates
                             .sort((a, b) => a.indexOf(inputValue) - b.indexOf(inputValue))
-                            .map(generateAutocompleteNode.bind(undefined, inputValue));
+                            .map(text => generateAutocompleteNode(text));
                         autocmpNodes.push(...candidateNodes);
 
                         return [
@@ -776,11 +855,6 @@ export class GameConsole {
 
             But for now, comments will be strewn
         */
-
-        /**
-         * Somewhat unnecessary subclass
-         */
-        class CommandSyntaxError extends SyntaxError { }
 
         /**
          * The three ways to chain commands together. If thought of as operators, then
@@ -911,6 +985,11 @@ export class GameConsole {
              */
             let inString = false;
             /**
+             * Only applicable when in a string, determines whether special characters like `"` and `\` should
+             * be treated as literal characters or if they should fulfill their special functions
+             */
+            let escaping = false;
+            /**
              * A stack of parser nodes, each one corresponding to where a group "begins".
              *
              * Consider the following query:
@@ -933,43 +1012,83 @@ export class GameConsole {
             let expectingEndOfGroup = 0;
 
             /**
-             * The parser advances character-by-character, and the handlers are just the
-             * code that should be run to process each character, depending on the current
-             * parser mode
+             * An alias for `current.args`, maintained to reduce property access spam
              */
-            const handlers: Record<typeof parserPhase, (char: string) => void> = {
-                /**
-                 * Handles a character in "command" mode; this is the default mode of operation,
-                 * and simply searches to build a command's name, create groups and perform chaining
-                 * @param char The character to handle
-                 */
-                cmd(char: string) {
-                    switch (char) {
-                        case " ":
-                        case "\n": {
-                            /*
-                                Ignore whitespace if there's currently no command
-                                and if we're not expecting any groups to be closed
+            let args = current.args;
 
-                                The last condition might not be totally needed, but it
-                                makes the control-flow a bit neater
+            /**
+             * Simply adds the given character to the last argument of the current command
+             * @param char The character to add
+             */
+            const addCharToLast = (char: string): void => {
+                if (!args.length) {
+                    current.args = args = [char];
+                } else {
+                    args[args.length - 1] += char;
+                }
+            };
 
-                                For what it's worth, it's meant to allow things like
-                                `(a; b) & c` to parse correctly without ever switching
-                                to args mode
+            /**
+             * Advances the `currentNode`, setting it as the successor (or `next`) of a given target and establishing
+             * the given chaining relation between the two nodes
+             * @param target The target to which the new node should be appended
+             * @param chaining The chaining type to use when associating the newly-created node and the `target` node
+             */
+            const advance = (target: { next?: ParserNode }, chaining: keyof typeof chainingChars): void => {
+                prevNode = currentNode;
+                target.next = currentNode = {
+                    cmd: current = {
+                        name: "",
+                        args: args = []
+                    },
+                    chaining: chainingChars[chaining]
+                };
+            };
 
-                                (Also, even though newlines can't be typed in manually, they can
-                                be pasted in, so that's why that case is handled)
-                            */
+            /**
+             * Benchmarks show that chunking actually hurts performance except in specific contrived examples,
+             * the detection of which would also lead to an overall loss in performance
+             */
+            for (const char of input) {
+                switch (char) {
+                    case " ":
+                    case "\n": {
+                        /*
+                            Ignore whitespace if there's currently no command
+                            and if we're not expecting any groups to be closed
+
+                            The last condition (`!expectingEndOfGroup`) might
+                            not be totally needed, but it makes the control-flow
+                            a bit neater
+
+                            For what it's worth, it's meant to allow things like
+                            `(a; b) & c` to parse correctly without ever switching
+                            to args mode
+
+                            (Also, even though newlines can't be typed in manually, they can
+                            be pasted in, so that's why that case is handled)
+                        */
+                        if (parserPhase === "cmd") {
                             if (current.name && !expectingEndOfGroup) {
                                 parserPhase = "args";
                             }
+
                             break;
                         }
-                        case ";":
-                        case "&":
-                        case "|": {
-                            // Error messages explain what this is for
+
+                        if (inString || char === "\n") {
+                            addCharToLast(char);
+                            break;
+                        }
+
+                        args.push("");
+                        break;
+                    }
+                    case ";":
+                    case "&":
+                    case "|": {
+                        // Error messages explain what this is for
+                        if (parserPhase === "cmd") {
                             if (!current.name) {
                                 if (commands === currentNode) {
                                     throw new CommandSyntaxError("Unexpected chaining character encountered at start of query");
@@ -978,8 +1097,7 @@ export class GameConsole {
                                 throw new CommandSyntaxError("Expected a query following a chaining character, but found another chaining character");
                             }
 
-                            prevNode = currentNode;
-                            (
+                            advance(
                                 /*
                                     If we're jumping out of a group, then we pop a parser node off of the
                                     group anchor stack and use that as a target; otherwise, we just use the
@@ -987,24 +1105,33 @@ export class GameConsole {
                                 */
                                 expectingEndOfGroup
                                     ? groupAnchors.pop()
-                                    : current
-                            ).next = currentNode = {
-                                cmd: current = {
-                                    name: "",
-                                    args: []
-                                },
-                                chaining: chainingChars[char]
-                            };
+                                    : current,
+                                char
+                            );
 
                             if (expectingEndOfGroup) {
                                 expectingEndOfGroup--;
                             }
-
                             break;
                         }
-                        case "(": {
-                            // `ab(d` is complete nonsense
+
+                        if (inString) {
+                            addCharToLast(char);
+                            break;
+                        }
+
+                        if (args.at(-1)?.length === 0) {
+                            args.length -= 1;
+                        }
+
+                        advance(current, char);
+                        parserPhase = "cmd";
+                        break;
+                    }
+                    case "(": {
+                        if (parserPhase === "cmd") {
                             if (current.name) {
+                                // `ab(d` is complete nonsense
                                 throw new CommandSyntaxError("Unexpected opening parentheses character '(' found");
                             }
 
@@ -1013,150 +1140,108 @@ export class GameConsole {
                             groupAnchors.push(currentNode);
                             break;
                         }
-                        case ")": {
+
+                        if (inString) {
+                            addCharToLast(char);
+                            break;
+                        }
+
+                        throw new CommandSyntaxError("Unexpected grouping character '('");
+                    }
+                    case ")": {
+                        if (parserPhase === "args") {
+                            if (inString) {
+                                addCharToLast(char);
+                                break;
+                            }
+
                             // Every `(` pushes onto the stack—therefore, no stack entries -> no group to close
                             if (!groupAnchors.has()) {
-                                throw new CommandSyntaxError("Unexpected closing parentheses character ')' found");
+                                throw new CommandSyntaxError("Unexpected grouping character ')'");
                             }
 
-                            if (expectingEndOfGroup) {
-                                /*
-                                    If we're here, then we're at the end of smth like `a | (b & (c; d))`; in that example, we'd
-                                    end up here when parsing the last `)`. At this point, the group anchor stack is holding—from
-                                    bottom to top—`a`'s parser node and `b`'s parser node. Since we're at the second `)`, that means
-                                    that `b`'s parser node is completely useless, since we're not going to attach anything to it—if we
-                                    were, then we'd've seen a chaining character instead.
+                            parserPhase = "cmd";
+                            // fallthrough
+                        }
 
-                                    Thus, we pop it off the stack and discard it, which puts `a`'s parser node on top.
-                                */
-                                groupAnchors.pop();
-                            } else {
-                                if (!current.name) {
-                                    // No name -> we got smth like `a & ()`
-                                    throw new CommandSyntaxError("Unexpected empty group");
-                                }
+                        if (!groupAnchors.has()) {
+                            throw new CommandSyntaxError("Unexpected closing parentheses character ')' found");
+                        }
 
-                                expectingEndOfGroup++;
-                            }
+                        if (expectingEndOfGroup) {
+                            /*
+                                If we're here, then we're at the end of smth like `a | (b & (c; d))`; in that example, we'd
+                                end up here when parsing the last `)`. At this point, the group anchor stack is holding—from
+                                bottom to top—`a`'s parser node and `b`'s parser node. Since we're at the second `)`, that means
+                                that `b`'s parser node is completely useless, since we're not going to attach anything to it—if we
+                                were, then we'd've seen a chaining character instead.
+
+                                Thus, we pop it off the stack and discard it, which puts `a`'s parser node on top.
+                            */
+                            groupAnchors.pop();
                             break;
                         }
-                        default: {
-                            // Prevent `a & (b; c) d`
+
+                        if (!current.name) {
+                            // No name -> we got smth like `a & ()`
+                            throw new CommandSyntaxError("Unexpected empty group");
+                        }
+
+                        expectingEndOfGroup++;
+                        break;
+                    }
+                    case "\"": {
+                        if (parserPhase === "cmd") break;
+
+                        if (inString) {
+                            if (escaping) {
+                                addCharToLast(char);
+                                escaping = false;
+                                break;
+                            }
+
+                            args.push("");
+                        } else if (args.at(-1)?.length) {
+                            // If we encounter a " in the middle of an argument
+                            // such as `say hel"lo`
+                            throw new CommandSyntaxError("Unexpected double-quote (\") character found.");
+                        }
+
+                        inString = !inString;
+                        break;
+                    }
+                    case "\\": {
+                        if (parserPhase === "cmd" || !inString || (escaping = !escaping)) break;
+
+                        addCharToLast(char);
+                        break;
+                    }
+                    default: {
+                        if (parserPhase === "cmd") {
                             if (expectingEndOfGroup) {
+                                // Prevent `a & (b; c) d`
                                 throw new CommandSyntaxError(`Expected a chaining character following the end of a group (found '${char}')`);
                             }
+
                             current.name += char;
-                        }
-                    }
-                },
-                /**
-                 * Handles a character in "args" mode; this mode is responsible for assembling the arguments
-                 * for a command invocation
-                 * @param char The character to handle
-                 */
-                args(char: string) {
-                    /**
-                     * An alias for `current.args`, maintained to reduce property access spam
-                     */
-                    const args = current.args;
-                    /**
-                     * Appends the current character (`char`) to the last argument of `current`'s
-                     * argument array
-                     */
-                    const addCharToLast = (): void => {
-                        if (!args.length) {
-                            args.push(char);
-                        } else {
-                            args[args.length - 1] += char;
-                        }
-                    };
-
-                    // this part is way more self-documenting than the others, so i won't
-                    // bother writing too many comments for the args phase
-
-                    switch (char) {
-                        case " ":
-                        case "\n": {
-                        //    ^^ included for the case where a query is pasted in
-                            if (inString) {
-                                addCharToLast();
-                            } else {
-                                args.push("");
-                            }
                             break;
                         }
-                        case ";":
-                        case "&":
-                        case "|": {
-                            if (inString) {
-                                addCharToLast();
-                            } else {
-                                if (args.at(-1)?.length === 0) {
-                                    args.length -= 1;
-                                }
 
-                                prevNode = currentNode;
-                                current.next = currentNode = {
-                                    cmd: current = {
-                                        name: "",
-                                        args: []
-                                    },
-                                    chaining: chainingChars[char]
-                                };
-                                parserPhase = "cmd";
-                            }
-                            break;
-                        }
-                        case "(": {
-                            if (inString) {
-                                addCharToLast();
-                                break;
-                            } else {
-                                throw new CommandSyntaxError("Unexpected grouping character '('");
-                            }
-                        }
-                        case ")": {
-                            if (inString) {
-                                addCharToLast();
-                                break;
-                            }
-
-                            if (groupAnchors.has()) {
-                                parserPhase = "cmd";
-                                handlers.cmd(")");
-                                break;
-                            }
-
-                            throw new CommandSyntaxError("Unexpected grouping character ')'");
-                        }
-                        case "\"": {
-                            if (inString) {
-                                args.push("");
-                            } else if (args.at(-1)?.length) {
-                                // If we encounter a " in the middle of an argument
-                                // such as `say hel"lo`
-                                throw new CommandSyntaxError("Unexpected double-quote (\") character found.");
-                            }
-                            inString = !inString;
-                            break;
-                        }
-                        default: {
-                            addCharToLast();
-                            break;
-                        }
+                        escaping = false;
+                        addCharToLast(char);
+                        break;
                     }
                 }
-            };
-
-            //todo split the input into chunks instead of singular characters; `abcdefg` needn't be parsed as 7 characters
-            for (const char of input) {
-                handlers[parserPhase](char);
             }
 
             // Self-explanatory error conditions after we reach end-of-input
 
             if (inString) {
                 throw new CommandSyntaxError("Unterminated string argument");
+            }
+
+            if (escaping) {
+                throw new CommandSyntaxError("Unresolved escape character");
             }
 
             if (groupAnchors.has() && !expectingEndOfGroup) {
@@ -1298,8 +1383,12 @@ export class GameConsole {
             */
             pushGroupAnchorIfPresent();
 
+            let iterationCount = 0;
             // eslint-disable-next-line no-unmodified-loop-condition -- cfa fix when™
             while (currentNode !== undefined) {
+                if (++iterationCount === 1e3) {
+                    console.warn("1000 iterations of query parsing; possible infinite loop");
+                }
                 error = false;
                 const entity = currentNode.cmd;
 
@@ -1395,45 +1484,6 @@ export class GameConsole {
         this._ui.output.append(this._generateHTML(entry, raw));
     }
 
-    private readonly _allowedTags = [
-        // Headings
-        "h1", "h2", "h3", "h4", "h5", "h6",
-
-        // Text stuff
-        "blockquote", "p", "pre", "span",
-
-        // List stuff
-        "li", "ol", "ul",
-
-        // Inline elements
-        "a", "em", "b", "bdi", "br", "cite", "code", "del", "ins",
-        "kbd", "mark", "q", "s", "samp", "small", "span", "strong",
-        "sub", "sup", "time", "u", "var",
-
-        // Table stuff
-        "caption", "col", "colgroup", "table", "tbody", "td", "tfoot",
-        "th", "thead", "tr"
-    ];
-
-    private _sanitizeHTML(message: string, opts?: { readonly strict: boolean, readonly escapeSpaces?: boolean }): string {
-        return message.replace(
-            /<\/?.*?>/g,
-            match => {
-                const tag = match.replace(/<\/?|>/g, "").split(" ")[0];
-
-                let str = !opts?.strict && this._allowedTags.includes(tag)
-                    ? match
-                    : match
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;");
-
-                opts?.escapeSpaces && (str = str.replace(/ /g, "&nbsp;"));
-
-                return str;
-            }
-        );
-    }
-
     private _generateHTML(entry: ConsoleData, raw = false): JQuery<HTMLDivElement> {
         const date = (() => {
             const timestamp = new Date(entry.timestamp);
@@ -1464,11 +1514,11 @@ export class GameConsole {
             sanitizer
         ]: [
             "html" | "text",
-            typeof GameConsole["prototype"]["_sanitizeHTML"]
+            typeof sanitizeHTML
         ] = raw
             ? [
                 "html",
-                this._sanitizeHTML.bind(this)
+                sanitizeHTML
             ]
             : [
                 "text",

@@ -1,57 +1,32 @@
-import {
-    ObjectDefinitions,
-    type ObjectDefinition
-} from "../utils/objectDefinitions";
+import { ObjectDefinitions, type ObjectDefinition } from "../utils/objectDefinitions";
 
 export interface BadgeDefinition extends ObjectDefinition {
-    readonly idString: string
-    readonly roles?: string | string[]
+    readonly roles: string[]
 }
 
-export const Badges = new ObjectDefinitions<BadgeDefinition>([
-    {
-        idString: "developr",
-        name: "Developr",
-        roles: "developr"
-    },
-    {
-        idString: "designr",
-        name: "Designr",
-        roles: "designr"
-    },
-    {
-        idString: "youtubr",
-        name: "Youtubr",
-        roles: ["youtubr", "123op"]
-    },
-    {
-        idString: "ownr",
-        name: "Ownr",
-        roles: "hasanger"
-    },
-    {
-        idString: "contributr+",
-        name: "Contributr+",
-        roles: ["katie", "leia"]
-    },
-    {
-        idString: "bleh",
-        name: "Bleh"
-    },
-    {
-        idString: "froog",
-        name: "Froog"
-    },
-    {
-        idString: "aegis_logo",
-        name: "AEGIS Logo"
-    },
-    {
-        idString: "flint_logo",
-        name: "Flint Logo"
-    },
-    {
-        idString: "duel",
-        name: "Duel"
-    }
-]);
+export const Badges = ObjectDefinitions.create<BadgeDefinition>()(
+    defaultFactory => ({
+        [defaultFactory]: () => ({
+            roles: []
+        }),
+        badge_factory: (name: string, roles: string[] = []) => ({
+            idString: name.toLowerCase().replace(/ /g, "_"),
+            name,
+            roles
+        })
+    })
+)(
+    ({ simple }) => [
+        simple("badge_factory", "Developr", ["developr"]),
+        simple("badge_factory", "Designr", ["designr"]),
+        simple("badge_factory", "Composr", ["composr"]),
+        simple("badge_factory", "Youtubr", ["youtubr", "123op"]),
+        simple("badge_factory", "Ownr", ["hasanger"]),
+        simple("badge_factory", "Contributr+", ["katie", "leia"]),
+        simple("badge_factory", "Bleh"),
+        simple("badge_factory", "Froog"),
+        simple("badge_factory", "AEGIS Logo"),
+        simple("badge_factory", "Flint Logo"),
+        simple("badge_factory", "Duel")
+    ]
+);
