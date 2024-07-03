@@ -2,9 +2,10 @@ import $ from "jquery";
 import nipplejs, { type JoystickOutputData } from "nipplejs";
 import { isMobile } from "pixi.js";
 import { GameConstants, InputActions } from "../../../../common/src/constants";
+import { type WeaponDefinition } from "../../../../common/src/definitions/loots";
 import { Scopes } from "../../../../common/src/definitions/scopes";
 import { Throwables, type ThrowableDefinition } from "../../../../common/src/definitions/throwables";
-import { InputPacket, type InputAction } from "../../../../common/src/packets/inputPacket";
+import { InputPacket, type InputAction, type SimpleInputActions } from "../../../../common/src/packets/inputPacket";
 import { Angle, Geometry, Numeric } from "../../../../common/src/utils/math";
 import { ItemType, type ItemDefinition } from "../../../../common/src/utils/objectDefinitions";
 import { Vec } from "../../../../common/src/utils/vector";
@@ -14,8 +15,7 @@ import { type GameSettings } from "../utils/console/gameConsole";
 import { FIRST_EMOTE_ANGLE, FOURTH_EMOTE_ANGLE, PIXI_SCALE, SECOND_EMOTE_ANGLE, THIRD_EMOTE_ANGLE } from "../utils/constants";
 
 export class InputManager {
-    readonly game: Game;
-    readonly binds: InputMapper;
+    readonly binds = new InputMapper();
 
     readonly isMobile!: boolean;
 
@@ -48,45 +48,46 @@ export class InputManager {
 
     readonly actions: InputAction[] = [];
 
-    addAction(action: InputAction | InputActions): void {
+    addAction(action: InputAction | SimpleInputActions): void {
         if (this.actions.length > 7) return;
 
         if (typeof action === "number") {
-            // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
             action = { type: action } as InputAction;
         }
 
         if (action.type === InputActions.DropItem || action.type === InputActions.DropWeapon) {
-            const uiManager = this.game.uiManager;
-            const item: ItemDefinition | undefined = (
-                action as typeof action & { type: InputActions.DropItem }
-            ).item ?? this.game.activePlayer?.activeItem;
+            const { inventory } = this.game.uiManager;
 
-            if (item !== undefined) {
-                let playSound = !item.noDrop;
-
-                if (playSound) {
-                    switch (item.itemType) {
-                        case ItemType.Ammo:
-                        case ItemType.Healing:
-                        case ItemType.Scope:
-                            playSound = uiManager.inventory.items[item.idString] > 0;
-                            break;
-                        case ItemType.Throwable:
-                        case ItemType.Armor:
-                        case ItemType.Gun:
-                        case ItemType.Melee:
-                        case ItemType.Skin:
-                            playSound = true; // probably fine…?
-                            break;
-                        case ItemType.Backpack:
-                            playSound = false; // womp womp
-                            break;
-                    }
-                }
-
-                playSound && this.game.soundManager.play("pickup");
+            let item!: ItemDefinition;
+            if (action.type === InputActions.DropItem) {
+                item = action.item;
+            } else if (action.type === InputActions.DropWeapon) {
+                item = inventory.weapons[action.slot] as unknown as WeaponDefinition;
             }
+
+            let playSound = !item.noDrop;
+
+            if (playSound) {
+                switch (item.itemType) {
+                    case ItemType.Ammo:
+                    case ItemType.Healing:
+                    case ItemType.Scope:
+                        playSound = inventory.items[item.idString] > 0;
+                        break;
+                    case ItemType.Throwable:
+                    case ItemType.Armor:
+                    case ItemType.Gun:
+                    case ItemType.Melee:
+                    case ItemType.Skin:
+                        playSound = true; // probably fine…?
+                        break;
+                    case ItemType.Backpack:
+                        playSound = false; // womp womp
+                        break;
+                }
+            }
+
+            if (playSound) this.game.soundManager.play("pickup");
         }
 
         this.actions.push(action);
@@ -104,7 +105,7 @@ export class InputManager {
     turning = false;
 
     // Initialize an array to store focus state for keypresses
-    focusController: string[] = [];
+    private readonly _focusController = new Set<string>();
 
     private _lastInputPacket: InputPacket | undefined;
     private _inputPacketTimer = 0;
@@ -146,25 +147,27 @@ export class InputManager {
         }
         packet.actions = this.actions;
 
-        this._inputPacketTimer++;
+        this._inputPacketTimer += this.game.serverDt;
 
         if (
-            !this._lastInputPacket ||
-            packet.didChange(this._lastInputPacket) ||
-            this._inputPacketTimer >= GameConstants.tickrate
+            !this._lastInputPacket
+            || packet.didChange(this._lastInputPacket)
+            || this._inputPacketTimer >= 100
         ) {
             this.game.sendPacket(packet);
             this._lastInputPacket = packet;
+            this._inputPacketTimer = 0;
         }
-
-        this._inputPacketTimer %= GameConstants.tickrate;
 
         this.actions.length = 0;
     }
 
-    constructor(game: Game) {
-        this.game = game;
-        this.binds = new InputMapper();
+    private static _instantiated = false;
+    constructor(readonly game: Game) {
+        if (InputManager._instantiated) {
+            throw new Error("Class 'InputManager' has already been instantiated");
+        }
+        InputManager._instantiated = true;
     }
 
     private mWheelStopTimer: number | undefined;
@@ -189,10 +192,11 @@ export class InputManager {
         }
 
         window.addEventListener("blur", () => {
-            for (const k of this.focusController) {
+            for (const k of this._focusController) {
                 this.handleLostFocus(k);
             }
-            this.focusController = [];
+
+            this._focusController.clear();
         });
 
         // different event targets… why?
@@ -202,9 +206,14 @@ export class InputManager {
         gameContainer.addEventListener("pointerup", this.handleInputEvent.bind(this, false));
         gameContainer.addEventListener("wheel", this.handleInputEvent.bind(this, true));
 
+        $("#emote-wheel > .button-center").on("click", () => {
+            this.emoteWheelActive = false;
+            this.selectedEmote = undefined;
+            this.pingWheelMinimap = false;
+            $("#emote-wheel").hide();
+        });
         gameContainer.addEventListener("pointermove", (e: MouseEvent) => {
             if (this.isMobile) return;
-
             this.mouseX = e.clientX;
             this.mouseY = e.clientY;
 
@@ -213,7 +222,6 @@ export class InputManager {
                 if (Geometry.distanceSquared(this.emoteWheelPosition, mousePosition) > 500) {
                     const angle = Angle.betweenPoints(this.emoteWheelPosition, mousePosition);
                     let slotName: string | undefined;
-
                     if (SECOND_EMOTE_ANGLE <= angle && angle <= FOURTH_EMOTE_ANGLE) {
                         this.selectedEmote = 0;
                         slotName = "top";
@@ -230,7 +238,7 @@ export class InputManager {
                     $("#emote-wheel").css("background-image", `url("./img/misc/emote_wheel_highlight_${slotName ?? "top"}.svg"), url("./img/misc/emote_wheel.svg")`);
                 } else {
                     this.selectedEmote = undefined;
-                    $("#emote-wheel").css("background-image", 'url("./img/misc/emote_wheel.svg")');
+                    $("#emote-wheel").css("background-image", "url(\"./img/misc/emote_wheel_highlight_center.svg\"), url(\"./img/misc/emote_wheel.svg\")");
                 }
             }
 
@@ -289,7 +297,7 @@ export class InputManager {
                 this.movement.moving = false;
             });
 
-            rightJoyStick.on("move", (_, data: JoystickOutputData) => {
+            rightJoyStick.on("move", (_, data) => {
                 rightJoyStickUsed = true;
                 this.rotation = -Math.atan2(data.vector.y, data.vector.x);
                 this.turning = true;
@@ -333,6 +341,8 @@ export class InputManager {
         // not be honored
         if (document.activeElement !== document.body) return;
 
+        const { type } = event;
+
         /*
             We don't want to allow keybinds to work with modifiers, because firstly,
             pressing ctrl + R to reload is dumb and secondly, doing that refreshes the page
@@ -351,13 +361,12 @@ export class InputManager {
         */
 
         if (event instanceof KeyboardEvent) {
+            const { key } = event;
             // This statement cross references and updates focus checks for key presses.
             if (down) {
-                if (!this.focusController.includes(event.key)) {
-                    this.focusController.push(event.key);
-                }
+                this._focusController.add(key);
             } else {
-                this.focusController = this.focusController.filter(item => item !== event.key);
+                this._focusController.delete(key);
             }
 
             let modifierCount = 0;
@@ -371,14 +380,14 @@ export class InputManager {
             // As stated before, more than one modifier or a modifier alongside another key should invalidate an input
             if (
                 (
-                    modifierCount > 1 ||
-                    (modifierCount === 1 && !["Control", "Meta"].includes(event.key))
+                    modifierCount > 1
+                    || (modifierCount === 1 && !["Control", "Meta"].includes(key))
                 ) && down
                 // …but it only invalidates pressing a key, not releasing it
             ) return;
         }
 
-        const key = this.getKeyFromInputEvent(event);
+        const input = this.getKeyFromInputEvent(event);
         let actionsFired = 0;
 
         if (event instanceof WheelEvent) {
@@ -391,14 +400,21 @@ export class InputManager {
             */
             clearTimeout(this.mWheelStopTimer);
             this.mWheelStopTimer = window.setTimeout(() => {
-                actionsFired = this.fireAllEventsAtKey(key, false);
+                actionsFired = this.fireAllEventsAtKey(input as string, false);
             }, 50);
 
-            actionsFired = this.fireAllEventsAtKey(key, true);
+            actionsFired = this.fireAllEventsAtKey(input as string, true);
             return;
         }
 
-        actionsFired = this.fireAllEventsAtKey(key, event.type === "keydown" || event.type === "pointerdown");
+        const isDown = type === "keydown" || type === "pointerdown";
+        if (Array.isArray(input)) {
+            for (const inp of input) {
+                actionsFired += this.fireAllEventsAtKey(inp, isDown);
+            }
+        } else {
+            actionsFired = this.fireAllEventsAtKey(input, isDown);
+        }
 
         if (actionsFired > 0 && this.game.gameStarted) {
             event.preventDefault();
@@ -419,6 +435,7 @@ export class InputManager {
                     query = query.replace("+", "-");
                 } else query = ""; // If the action isn't invertible, then we do nothing
             }
+
             // little exception for those without the loot bind bound
             this.game.console.handleQuery(query);
             if (this.binds.getInputsBoundToAction("loot").length === 0 && query === "interact") {
@@ -429,37 +446,51 @@ export class InputManager {
         return actions.length;
     }
 
-    private getKeyFromInputEvent(event: KeyboardEvent | MouseEvent | WheelEvent): string {
-        let key = "";
+    private getKeyFromInputEvent<
+        const Ev extends KeyboardEvent | MouseEvent | WheelEvent
+    >(event: Ev): Ev extends KeyboardEvent ? string | string[] : string {
+        type Ret = typeof event extends KeyboardEvent ? string[] : string;
+
+        let input = "";
         if (event instanceof KeyboardEvent) {
-            key = event.key.length > 1 ? event.key : event.key.toUpperCase();
-            if (key === " ") {
-                key = "Space";
+            const { key, code, location } = event;
+
+            input = key.length > 1
+                ? key
+                : code.match(/^(Key|Digit)/)
+                    ? code.slice(-1)
+                    : code;
+
+            switch (location) {
+                case 1: return [input, `Left${input}`] as Ret;
+                case 2: return [input, `Right${input}`] as Ret;
+                case 0:
+                default: return input as Ret;
             }
         }
 
         if (event instanceof WheelEvent) {
             switch (true) {
-                case event.deltaX > 0: { key = "MWheelRight"; break; }
-                case event.deltaX < 0: { key = "MWheelLeft"; break; }
-                case event.deltaY > 0: { key = "MWheelDown"; break; }
-                case event.deltaY < 0: { key = "MWheelUp"; break; }
-                case event.deltaZ > 0: { key = "MWheelForwards"; break; }
-                case event.deltaZ < 0: { key = "MWheelBackwards"; break; }
+                case event.deltaX > 0: { input = "MWheelRight"; break; }
+                case event.deltaX < 0: { input = "MWheelLeft"; break; }
+                case event.deltaY > 0: { input = "MWheelDown"; break; }
+                case event.deltaY < 0: { input = "MWheelUp"; break; }
+                case event.deltaZ > 0: { input = "MWheelForwards"; break; }
+                case event.deltaZ < 0: { input = "MWheelBackwards"; break; }
             }
 
-            if (key === "") {
+            if (input === "") {
                 console.error("An unrecognized scroll wheel event was received: ", event);
             }
 
-            return key;
+            return input as Ret;
         }
 
         if (event instanceof MouseEvent) {
-            key = `Mouse${event.button}`;
+            input = `Mouse${event.button}`;
         }
 
-        return key;
+        return input as Ret;
     }
 
     private readonly actionsNames: Record<keyof typeof defaultBinds, string> = {
@@ -467,34 +498,36 @@ export class InputManager {
         "+down": "Move Down",
         "+left": "Move Left",
         "+right": "Move Right",
-        interact: "Interact",
-        loot: "Loot",
+        "interact": "Interact",
+        "loot": "Loot",
         "slot 0": "Equip Primary",
         "slot 1": "Equip Secondary",
         "slot 2": "Equip Melee",
         "equip_or_cycle_throwables 1": "Equip/Cycle Throwable",
-        last_item: "Equip Last Weapon",
-        other_weapon: "Equip Other Gun",
-        swap_gun_slots: "Swap Gun Slots",
+        "last_item": "Equip Last Weapon",
+        "other_weapon": "Equip Other Gun",
+        "swap_gun_slots": "Swap Gun Slots",
         "cycle_items -1": "Equip Previous Weapon",
         "cycle_items 1": "Equip Next Weapon",
         "+attack": "Use Weapon",
-        drop: "Drop Active Weapon",
-        reload: "Reload",
+        "drop": "Drop Active Weapon",
+        "reload": "Reload",
         "cycle_scopes -1": "Previous Scope",
         "cycle_scopes 1": "Next Scope",
         "use_consumable gauze": "Use Gauze",
         "use_consumable medikit": "Use Medikit",
         "use_consumable cola": "Use Cola",
         "use_consumable tablets": "Use Tablets",
-        cancel_action: "Cancel Action",
+        "cancel_action": "Cancel Action",
         "+view_map": "View Map",
-        toggle_map: "Toggle Fullscreen Map",
-        toggle_minimap: "Toggle Minimap",
-        toggle_hud: "Toggle HUD",
+        "toggle_map": "Toggle Fullscreen Map",
+        "toggle_minimap": "Toggle Minimap",
+        "toggle_hud": "Toggle HUD",
         "+emote_wheel": "Emote Wheel",
-        "+map_ping_wheel": "Map Ping Wheel",
-        toggle_console: "Toggle Console"
+        "+map_ping_wheel": "Switch to Map Ping",
+        "+map_ping": "Map Ping Wheel",
+        "toggle_console": "Toggle Console",
+        "toggle_slot_lock": "Toggle Slot Lock"
     };
 
     cycleScope(offset: number): void {
@@ -529,7 +562,7 @@ export class InputManager {
     cycleThrowable(offset: number): void {
         const throwable = this.game.uiManager.inventory.weapons
             .find(weapon => weapon?.definition.itemType === ItemType.Throwable)
-            ?.definition as ThrowableDefinition;
+            ?.definition as ThrowableDefinition | undefined;
 
         if (!throwable) return;
 
@@ -561,9 +594,9 @@ export class InputManager {
         }
     }
 
+    private readonly _keybindsContainer = $<HTMLDivElement>("#tab-keybinds-content");
     generateBindsConfigScreen(): void {
-        const keybindsContainer = $("#tab-keybinds-content");
-        keybindsContainer.html("").append(
+        this._keybindsContainer.html("").append(
             $("<div>",
                 {
                     class: "modal-item",
@@ -580,7 +613,7 @@ export class InputManager {
 
         let activeButton: HTMLButtonElement | undefined;
         for (const action in defaultBinds) {
-            const bindContainer = $("<div/>", { class: "modal-item" }).appendTo(keybindsContainer);
+            const bindContainer = $("<div/>", { class: "modal-item" }).appendTo(this._keybindsContainer);
 
             $("<div/>", {
                 class: "setting-title",
@@ -607,9 +640,9 @@ export class InputManager {
                     event.stopImmediatePropagation();
 
                     if (
-                        event instanceof MouseEvent &&
-                        event.type === "mousedown" &&
-                        !bindButton.classList.contains("active")
+                        event instanceof MouseEvent
+                        && event.type === "mousedown"
+                        && !bindButton.classList.contains("active")
                     ) {
                         activeButton?.classList.remove("active");
                         bindButton.classList.add("active");
@@ -619,7 +652,9 @@ export class InputManager {
 
                     if (bindButton.classList.contains("active")) {
                         event.preventDefault();
-                        const key = this.getKeyFromInputEvent(event);
+                        const keyRaw = this.getKeyFromInputEvent(event);
+                        // use console if you want to bind specifically to a left/right variant
+                        const key = Array.isArray(keyRaw) ? keyRaw[0] : keyRaw;
 
                         if (bind) {
                             this.binds.remove(bind, action);
@@ -661,7 +696,7 @@ export class InputManager {
 
             this.generateBindsConfigScreen();
             this.game.console.writeToLocalStorage();
-        })).appendTo(keybindsContainer);
+        })).appendTo(this._keybindsContainer);
 
         // Change the weapons slots keybind text
         for (let i = 0, maxWeapons = GameConstants.player.maxWeapons; i < maxWeapons; i++) {
@@ -705,14 +740,13 @@ class InputMapper {
     private readonly _inputToAction = new Map<string, Set<string>>();
     private readonly _actionToInput = new Map<string, Set<string>>();
 
-    /* eslint-disable @typescript-eslint/indent, indent, no-sequences */
-    private static readonly _generateGetAndSetIfAbsent =
-        <K, V>(map: Map<K, V>, defaultValue: V) =>
+    private static readonly _generateGetAndSetIfAbsent
+        = <K, V>(map: Map<K, V>, defaultValue: V) =>
             (key: K) =>
                 map.get(key) ?? (() => (map.set(key, defaultValue), defaultValue))();
 
-    private static readonly _generateAdder =
-        <K, V, T>(forwardsMap: Map<K, Set<V>>, backwardsMap: Map<V, Set<K>>, thisValue: T) =>
+    private static readonly _generateAdder
+        = <K, V, T>(forwardsMap: Map<K, Set<V>>, backwardsMap: Map<V, Set<K>>, thisValue: T) =>
             (key: K, ...values: V[]): T => {
                 const forwardSet = InputMapper._generateGetAndSetIfAbsent(forwardsMap, new Set())(key);
 
@@ -753,12 +787,14 @@ class InputMapper {
         if (actions === undefined) return false;
 
         actions.delete(action);
+        // safe because the backward map has already been checked
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         this._actionToInput.get(action)!.delete(input);
         return true;
     }
 
-    private static readonly _generateRemover =
-        <K, V, T>(forwardsMap: Map<K, Set<V>>, backwardsMap: Map<V, Set<K>>, thisValue: T) =>
+    private static readonly _generateRemover
+        = <K, V, T>(forwardsMap: Map<K, Set<V>>, backwardsMap: Map<V, Set<K>>, thisValue: T) =>
             (key: K) => {
                 forwardsMap.delete(key);
 
@@ -792,8 +828,8 @@ class InputMapper {
         return this;
     }
 
-    private static readonly _generateGetter =
-        <K, V>(map: Map<K, Set<V>>) =>
+    private static readonly _generateGetter
+        = <K, V>(map: Map<K, Set<V>>) =>
             (key: K) => [...(map.get(key)?.values?.() ?? [])];
 
     /**
@@ -809,8 +845,8 @@ class InputMapper {
      */
     readonly getActionsBoundToInput = InputMapper._generateGetter(this._inputToAction);
 
-    private static readonly _generateLister =
-        <K, V>(map: Map<K, V>) =>
+    private static readonly _generateLister
+        = <K, V>(map: Map<K, V>) =>
             () => [...map.keys()];
 
     /**

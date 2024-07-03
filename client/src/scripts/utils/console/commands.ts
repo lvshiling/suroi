@@ -1,11 +1,11 @@
 // noinspection JSConstantReassignment
-import $ from "jquery";
 import { Rectangle, RendererType, Sprite, VERSION } from "pixi.js";
 import { GameConstants, InputActions, SpectateActions } from "../../../../../common/src/constants";
 import { HealingItems, type HealingItemDefinition } from "../../../../../common/src/definitions/healingItems";
 import { Loots } from "../../../../../common/src/definitions/loots";
 import { Scopes, type ScopeDefinition } from "../../../../../common/src/definitions/scopes";
 import { Throwables } from "../../../../../common/src/definitions/throwables";
+import { type InputAction } from "../../../../../common/src/packets/inputPacket";
 import { SpectatePacket } from "../../../../../common/src/packets/spectatePacket";
 import { Numeric } from "../../../../../common/src/utils/math";
 import { handleResult, type Result } from "../../../../../common/src/utils/misc";
@@ -13,20 +13,26 @@ import { ItemType, type ReferenceTo } from "../../../../../common/src/utils/obje
 import { Vec } from "../../../../../common/src/utils/vector";
 import { Config } from "../../config";
 import { type Game } from "../../game";
-import { COLORS } from "../constants";
 import { type InputManager } from "../../managers/inputManager";
+import { COLORS } from "../constants";
 import { sanitizeHTML, stringify } from "../misc";
 import { type PossibleError, type Stringable } from "./gameConsole";
 import { Casters, ConVar } from "./variables";
 
-type CommandExecutor<ErrorType = never> = (
+type CommandExecutor<ErrorType> = (
     this: Game,
     ...args: Array<string | undefined>
-) => PossibleError<ErrorType>;
+    // this a return type bruh
+    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type
+) => void | PossibleError<ErrorType>;
 
 interface CommandInfo {
     readonly short: string
     readonly long: string
+    /**
+     * @default false
+     */
+    readonly allowOnlyWhenGameStarted?: boolean
     readonly signatures: Array<{
         readonly args: Array<{
             readonly name: string
@@ -40,7 +46,7 @@ interface CommandInfo {
 
 export class Command<
     Invertible extends boolean = false,
-    ErrorType extends Stringable | never = never
+    ErrorType extends Stringable = never
 > {
     private readonly _name: string;
     get name(): string {
@@ -49,7 +55,9 @@ export class Command<
 
     private readonly _executor: CommandExecutor<ErrorType>;
     run(args: Array<string | undefined> = []): PossibleError<ErrorType> {
-        return this._executor.call(this._game, ...args);
+        if (!this._info.allowOnlyWhenGameStarted || this._game.gameStarted) {
+            return this._executor.call(this._game, ...args) as PossibleError<ErrorType>;
+        }
     }
 
     private readonly _game: Game;
@@ -67,7 +75,7 @@ export class Command<
         return this._info;
     }
 
-    static createInvertiblePair<ErrorType extends Stringable | never = never>(
+    static createInvertiblePair<ErrorType extends Stringable = never>(
         name: string,
         on: CommandExecutor<ErrorType>,
         off: CommandExecutor<ErrorType>,
@@ -90,19 +98,18 @@ export class Command<
             true
         );
 
-        // @ts-expect-error not worth marking the field as not mutable
+        // @ts-expect-error not worth marking the field as mutable
         plus._inverse = minus;
-        // @ts-expect-error not worth marking the field as not mutable
+        // @ts-expect-error not worth marking the field as mutable
         minus._inverse = plus;
     }
 
-    static createCommand<ErrorType extends Stringable | never = never>(
+    static createCommand<ErrorType extends Stringable = undefined>(
         name: string,
         executor: CommandExecutor<ErrorType>,
         game: Game,
         info: CommandInfo
     ): void {
-        /* eslint-disable no-new */
         new Command(name, executor, game, info);
     }
 
@@ -147,7 +154,7 @@ export class Command<
                     i++, arg = args[i]
                 ) {
                     if (arg.rest) {
-                        // @ts-expect-error meh
+                        // @ts-expect-error not worth making the prop mutable just for this edge-case
                         arg.rest = false;
                         console.warn(
                             `Found illegal rest argument in info string of command '${this._name}' (signature ${index}, argument '${arg.name}', position ${i})`
@@ -155,7 +162,7 @@ export class Command<
                     }
                 }
 
-                if (new Set(args.map((arg) => arg.name)).size !== args.length) {
+                if (new Set(args.map(arg => arg.name)).size !== args.length) {
                     console.error(
                         `Found duplicate argument names in info string of command '${this._name}' (signature ${index})`
                     );
@@ -185,7 +192,7 @@ export function setUpCommands(game: Game): void {
         Command.createInvertiblePair(
             name,
             spectateAction
-                ? function(): undefined {
+                ? function() {
                     this.inputManager.movement[name] = true;
                     if (this.spectating) {
                         const packet = new SpectatePacket();
@@ -193,16 +200,17 @@ export function setUpCommands(game: Game): void {
                         this.sendPacket(packet);
                     }
                 }
-                : function(): undefined {
+                : function() {
                     this.inputManager.movement[name] = true;
                 },
-            function(): undefined {
+            function() {
                 this.inputManager.movement[name] = false;
             },
             game,
             {
                 short: `Moves the player in the '${name}' direction`,
                 long: `Starts moving the player in the '${name}' direction when invoked`,
+                allowOnlyWhenGameStarted: true,
                 signatures: [
                     {
                         args: [],
@@ -213,6 +221,7 @@ export function setUpCommands(game: Game): void {
             {
                 short: `Halts the player's movement in the '${name}' direction`,
                 long: `Stops moving the player in the '${name}' direction when invoked`,
+                allowOnlyWhenGameStarted: true,
                 signatures: [
                     {
                         args: [],
@@ -231,13 +240,13 @@ export function setUpCommands(game: Game): void {
     // shut
     /*
         Normally, arrow function would be preferred, but since
-        the callbacks have their this value bound, leaving them as
+        the callbacks have their `this` value bound, leaving them as
         function expressions instead of arrow functions allows us to
-        quickly switch to using this if needed, instead of having to
+        quickly switch to using `this` if needed, instead of having to
         change back from an arrow function
     */
     /* eslint-disable prefer-arrow-callback */
-    Command.createCommand<string>(
+    Command.createCommand(
         "slot",
         function(slot) {
             const slotNumber = Casters.toInt(slot ?? "NaN");
@@ -254,8 +263,9 @@ export function setUpCommands(game: Game): void {
         {
             short: "Attempts to switch to the item in a given slot. The slot number is 0-indexed",
             long:
-                "When invoked, an attempt to swap to the slot passed in argument will be made. The slot number " +
-                "is zero-indexed, meaning that 0 designates the first slot, 1 designates the second and 2 designates the third",
+                "When invoked, an attempt to swap to the slot passed in argument will be made. The slot number "
+                + "is zero-indexed, meaning that 0 designates the first slot, 1 designates the second and 2 designates the third",
+            allowOnlyWhenGameStarted: true,
             signatures: [
                 {
                     args: [
@@ -272,24 +282,25 @@ export function setUpCommands(game: Game): void {
 
     Command.createCommand(
         "last_item",
-        function(): undefined {
+        function() {
             this.inputManager.addAction(InputActions.EquipLastItem);
         },
         game,
         {
             short: "Attempts to switch to the last item the player deployed",
             long: "When invoked, the player's last active slot will be switched to, if possible",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createCommand(
         "other_weapon",
-        function(): undefined {
-            let index =
-                this.uiManager.inventory.activeWeaponIndex === 0 || (
-                    this.uiManager.inventory.weapons[0] === undefined &&
-                    this.uiManager.inventory.activeWeaponIndex !== 1
+        function() {
+            let index
+                = this.uiManager.inventory.activeWeaponIndex === 0 || (
+                    this.uiManager.inventory.weapons[0] === undefined
+                    && this.uiManager.inventory.activeWeaponIndex !== 1
                 )
                     ? 1
                     : 0;
@@ -305,26 +316,28 @@ export function setUpCommands(game: Game): void {
         {
             short: "Attempts to switch to the other weapon in the player's inventory",
             long: "When invoked, the player will swap to the other weapon slot if there is a weapon there. If not, melee will be switched to",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createCommand(
         "swap_gun_slots",
-        function(): undefined {
+        function() {
             this.inputManager.addAction(InputActions.SwapGunSlots);
         },
         game,
         {
             short: "Exchanges the guns' slots in the player's inventory",
             long:
-                "When invoked, the item in slot 0 will be placed in slot 1 and vice versa. Empty slots are treated normally, meaning " +
-                "that invoking this command with only one gun in an inventory will send it to the other slot, leaving the original slot empty",
+                "When invoked, the item in slot 0 will be placed in slot 1 and vice versa. Empty slots are treated normally, meaning "
+                + "that invoking this command with only one gun in an inventory will send it to the other slot, leaving the original slot empty",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "cycle_items",
         function(offset) {
             const step = Casters.toInt(offset ?? "NaN");
@@ -363,9 +376,10 @@ export function setUpCommands(game: Game): void {
         {
             short: "Switches to the item <em>n</em> slots over, where <em>n</em> is some integer",
             long:
-                "When invoked with an integer argument <em>n</em>, the slot offset from the current one by <em>n</em> slots will be " +
-                "switched to. If the offset is beyond the slots' range (< 0 or > 2), wrap-around is performed. Empty slots are ignored " +
-                "and cannot be swapped to",
+                "When invoked with an integer argument <em>n</em>, the slot offset from the current one by <em>n</em> slots will be "
+                + "switched to. If the offset is beyond the slots' range (< 0 or > 2), wrap-around is performed. Empty slots are ignored "
+                + "and cannot be swapped to",
+            allowOnlyWhenGameStarted: true,
             signatures: [
                 {
                     args: [
@@ -382,38 +396,124 @@ export function setUpCommands(game: Game): void {
 
     Command.createCommand(
         "interact",
-        function(): undefined {
+        function() {
             this.inputManager.addAction(InputActions.Interact);
         },
         game,
         {
             short: "Interacts with an object, if there is one",
             long: "When invoked, the player will attempt to interact with the closest interactable object that is in range",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
+    for (const [cmdName, action, shortDesc, longDesc] of [
+        [
+            "lock_slot",
+            InputActions.LockSlot,
+            "Locks a slot, rendering it immutable",
+            "Locks a weapon slot. A locked weapon slot cannot have its weapon changed, neither by dropping it, "
+            + "nor by replacing the weapon with one on the ground. However, locked slots may still be swapped via"
+            + "<code>swap_gun_slots</code>, which will transfer the lock appropriately. Use <code>unlock_slot</code> "
+            + "to undo a lock."
+        ],
+        [
+            "unlock_slot",
+            InputActions.UnlockSlot,
+            "Unlocks a slot, rendering it mutable",
+            "Unlocks a weapon slot. A locked weapon slot cannot have its weapon changed, neither by dropping it, "
+            + "nor by replacing the weapon with one on the ground. However, locked slots may still be swapped via"
+            + "<code>swap_gun_slots</code>, which will transfer the lock appropriately. Use <code>lock_slot</code> "
+            + "to lock a slot."
+
+        ],
+        [
+            "toggle_slot_lock",
+            InputActions.ToggleSlotLock,
+            "Toggles the lock on a slot, either locking or unlocking it",
+            "Either locks or unlocks a weapon slot. Locked slots cannot have their contents changed."
+
+        ]
+    ] as ReadonlyArray<
+        readonly [
+            string,
+            (
+                InputAction extends infer I
+                    ? I extends { readonly slot: number }
+                        ? I
+                        : never
+                    : never
+            )["type"],
+            string,
+            string
+        ]
+    >) {
+        Command.createCommand(
+            cmdName,
+            function(slot) {
+                let target = this.uiManager.inventory.activeWeaponIndex;
+
+                if (slot) { // <- excludes explicit empty string
+                    const newTarget = Casters.toInt(slot ?? "NaN");
+
+                    if ("err" in newTarget) {
+                        return {
+                            err: `Cannot lock invalid slot '${slot}'`
+                        };
+                    }
+
+                    target = newTarget.res;
+                }
+
+                this.inputManager.addAction({
+                    type: action,
+                    slot: target
+                });
+            },
+            game,
+            {
+                short: shortDesc,
+                long: longDesc,
+                allowOnlyWhenGameStarted: true,
+                signatures: [
+                    {
+                        args: [
+                            {
+                                name: "target",
+                                type: ["integer"],
+                                optional: true
+                            }
+                        ],
+                        noexcept: false
+                    }
+                ]
+            }
+        );
+    }
+
     Command.createCommand(
         "loot",
-        function(): undefined {
+        function() {
             this.inputManager.addAction(InputActions.Loot);
         },
         game,
         {
             short: "Loots closest object",
             long: "Loots closest object, this command is also invoked with interact if there is no key bound to loot",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createInvertiblePair(
         "attack",
-        function(): undefined {
+        function() {
             if (this.inputManager.attacking) return;
 
             this.inputManager.attacking = true;
         },
-        function(): undefined {
+        function() {
             if (!this.inputManager.attacking) return;
 
             this.inputManager.attacking = false;
@@ -422,18 +522,20 @@ export function setUpCommands(game: Game): void {
         {
             short: "Starts attacking",
             long: "When invoked, the player will start trying to attack as if the attack button was held down. Does nothing if the player is attacking",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         },
         {
             short: "Stops attacking",
             long: "When invoked, the player will stop trying to attack, as if the attack button was released. Does nothing if the player isn't attacking",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createCommand(
         "drop",
-        function(): undefined {
+        function() {
             this.inputManager.addAction({
                 type: InputActions.DropWeapon,
                 slot: this.uiManager.inventory.activeWeaponIndex
@@ -443,11 +545,12 @@ export function setUpCommands(game: Game): void {
         {
             short: "Drops the current active item",
             long: "When invoked, the player will attempt to drop the item they're currently holding",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "cycle_scopes",
         function(offset) {
             const step = Casters.toInt(offset ?? "NaN");
@@ -463,9 +566,10 @@ export function setUpCommands(game: Game): void {
         {
             short: "Switches to the scope <em>n</em> slots over, where <em>n</em> is some integer",
             long:
-                "When invoked with an integer argument <em>n</em>, the scope offset from the current one by <em>n</em> slots will be " +
-                "switched to. If the offset is beyond the slots' range, wrap-around is performed if the user has " +
-                "<code>cl_loop_scope_selection</code> set to <code>true</code>",
+                "When invoked with an integer argument <em>n</em>, the scope offset from the current one by <em>n</em> slots will be "
+                + "switched to. If the offset is beyond the slots' range, wrap-around is performed if the user has "
+                + "<code>cl_loop_scope_selection</code> set to <code>true</code>",
+            allowOnlyWhenGameStarted: true,
             signatures: [
                 {
                     args: [
@@ -480,7 +584,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "equip_or_cycle_throwables",
         function(offset) {
             // If we're already on a throwable slot, start cycling. Otherwise, make that slot active
@@ -509,9 +613,10 @@ export function setUpCommands(game: Game): void {
         {
             short: "Selects the throwable slot, but if it already is, then switches to the throwable <em>n</em> slots over, where <em>n</em> is some integer",
             long:
-                "When invoked, this command will switch to the first throwable slot it finds if the active slot isn't a throwable slot—in this case, the " +
-                "'offset' argument is ignored. If a throwable slot is selected, then the throwable offset from the current one by <em>n</em> slots will be " +
-                "selected, with the indices wrapping around if need be",
+                "When invoked, this command will switch to the first throwable slot it finds if the active slot isn't a throwable slot—in this case, the "
+                + "'offset' argument is ignored. If a throwable slot is selected, then the throwable offset from the current one by <em>n</em> slots will be "
+                + "selected, with the indices wrapping around if need be",
+            allowOnlyWhenGameStarted: true,
             signatures: [
                 {
                     args: [
@@ -540,7 +645,7 @@ export function setUpCommands(game: Game): void {
                 ![...HealingItems, ...Scopes, ...Throwables].some(h => h.idString === idString)
             ) {
                 return {
-                    err: `There is no scope, consumable nor throwable whose idString is '${idString}'`
+                    err: `There is no scope, consumable, nor throwable whose idString is '${idString}'`
                 };
             }
 
@@ -553,6 +658,7 @@ export function setUpCommands(game: Game): void {
         {
             short: "Uses the item designated by the given <code>idString</code>",
             long: "When invoked with a string argument, an attempt will be made to use the consumable, scope, or throwable whose <code>idString</code> matches it",
+            allowOnlyWhenGameStarted: true,
             signatures: [
                 {
                     args: [
@@ -569,110 +675,63 @@ export function setUpCommands(game: Game): void {
 
     Command.createCommand(
         "cancel_action",
-        function(): undefined {
+        function() {
             game.inputManager.addAction(InputActions.Cancel);
         },
         game,
         {
             short: "Cancels the action (reloading and or consuming) the player is currently executing",
             long: "When invoked, the current action the player is executing will be stopped, if there is one",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createInvertiblePair(
         "view_map",
-        function(): undefined {
+        function() {
             game.map.switchToBigMap();
         },
-        function(): undefined {
+        function() {
             game.map.switchToSmallMap();
         },
         game,
         {
             short: "Shows the game map",
             long: "When invoked, the fullscreen map will be toggled",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         },
         {
             short: "Hides the game map",
             long: "When invoked, the fullscreen map will be hidden",
-            signatures: [{ args: [], noexcept: true }]
-        }
-    );
-
-    Command.createCommand(
-        "toggle_map",
-        function(): undefined {
-            game.map.toggle();
-        },
-        game,
-        {
-            short: "Toggles the game map",
-            long: "When invoked, the fullscreen map will be toggled",
-            signatures: [{ args: [], noexcept: true }]
-        }
-    );
-
-    Command.createCommand(
-        "toggle_minimap",
-        function(): undefined {
-            if (!$("canvas").hasClass("over-hud")) {
-                game.console.setBuiltInCVar("cv_minimap_minimized", !game.console.getBuiltInCVar("cv_minimap_minimized"));
-            }
-        },
-        game,
-        {
-            short: "Toggles the game minimap",
-            long: "When invoked, the minimap will be toggled",
-            signatures: [{ args: [], noexcept: true }]
-        }
-    );
-    Command.createCommand(
-        "toggle_hud",
-        function(): undefined {
-            $("#game-ui").toggle();
-            if (game.map.visible) { game.map.toggleMinimap(); }
-        },
-        game,
-        {
-            short: "Toggles the game HUD",
-            long: "When invoked, the Heads Up Display will be toggled",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createCommand(
         "reload",
-        function(): undefined {
+        function() {
             game.inputManager.addAction(InputActions.Reload);
         },
         game,
         {
             short: "Reloads the current active item",
             long: "When invoked, the player will attempt to reload the item they're currently holding",
-            signatures: [{ args: [], noexcept: true }]
-        }
-    );
-
-    Command.createCommand(
-        "toggle_console",
-        function(): undefined {
-            gameConsole.toggle();
-        },
-        game,
-        {
-            short: "Toggles the game's console",
-            long: "When invoked, this command will close the console if it is open, and will open the console if it is closed",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createInvertiblePair(
         "emote_wheel",
-        function(): undefined {
-            if (game.console.getBuiltInCVar("cv_hide_emotes")) return;
-            if (this.gameOver) return;
+        function() {
+            if (
+                game.console.getBuiltInCVar("cv_hide_emotes")
+                || this.gameOver
+                || this.inputManager.emoteWheelActive
+            ) return;
             const { mouseX, mouseY } = this.inputManager;
 
             const scale = this.console.getBuiltInCVar("cv_ui_scale");
@@ -681,7 +740,7 @@ export function setUpCommands(game: Game): void {
                 this.inputManager.pingWheelPosition = Vec.clone(this.inputManager.gameMousePosition);
             }
 
-            $("#emote-wheel")
+            this.uiManager.ui.emoteWheel
                 .css("left", `${mouseX / scale}px`)
                 .css("top", `${mouseY / scale}px`)
                 .css("background-image", 'url("./img/misc/emote_wheel.svg")')
@@ -689,63 +748,67 @@ export function setUpCommands(game: Game): void {
             this.inputManager.emoteWheelActive = true;
             this.inputManager.emoteWheelPosition = Vec.create(mouseX, mouseY);
         },
-        function(): undefined {
-            if (this.inputManager.emoteWheelActive) {
-                this.inputManager.emoteWheelActive = false;
-                this.inputManager.pingWheelMinimap = false;
+        function() {
+            if (!this.inputManager.emoteWheelActive) return;
 
-                $("#emote-wheel").hide();
+            this.inputManager.emoteWheelActive = false;
+            this.inputManager.pingWheelMinimap = false;
 
-                if (this.inputManager.selectedEmote === undefined) return;
+            this.uiManager.ui.emoteWheel.hide();
 
-                const emote = this.uiManager.emotes[this.inputManager.selectedEmote];
-                if (emote && !this.inputManager.pingWheelActive) {
-                    this.inputManager.addAction({
-                        type: InputActions.Emote,
-                        emote
-                    });
-                } else if (this.inputManager.pingWheelActive) {
-                    this.inputManager.addAction({
-                        type: InputActions.MapPing,
-                        ping: this.uiManager.mapPings[this.inputManager.selectedEmote],
-                        position: this.inputManager.pingWheelPosition
-                    });
-                }
-                this.inputManager.selectedEmote = undefined;
+            if (this.inputManager.selectedEmote === undefined) return;
+
+            const emote = this.uiManager.emotes[this.inputManager.selectedEmote];
+            if (emote && !this.inputManager.pingWheelActive) {
+                this.inputManager.addAction({
+                    type: InputActions.Emote,
+                    emote
+                });
+            } else if (this.inputManager.pingWheelActive) {
+                this.inputManager.addAction({
+                    type: InputActions.MapPing,
+                    ping: this.uiManager.mapPings[this.inputManager.selectedEmote],
+                    position: this.inputManager.pingWheelPosition
+                });
             }
+            this.inputManager.selectedEmote = undefined;
         },
         game,
         {
             short: "Opens the emote wheel",
             long: "When invoked, the emote wheel will be opened, allowing the user to pick an emote",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         },
         {
             short: "Closes the emote wheel, using the designated emote, if any",
             long: "When invoked, the emote wheel will be closed, and if an emote has been selected, it will be displayed",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createInvertiblePair(
         "map_ping_wheel",
-        function(): undefined {
+        function() {
             this.inputManager.pingWheelActive = true;
             this.uiManager.updateEmoteWheel();
         },
-        function(): undefined {
+        function() {
             this.inputManager.pingWheelActive = false;
             this.uiManager.updateEmoteWheel();
         },
         game,
         {
-            short: "Enables the emote wheel to ping mode",
-            long: "When invoked, the emote wheel will switch from triggering emotes to trigger map pings",
+            short: "Enables the emote wheel's ping mode",
+            long: "When invoked, the emote wheel will switch from triggering emotes to triggering map pings",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         },
         {
             short: "Disables the emote wheel's ping mode",
             long: "When invoked, the emote wheel will revert back to trigger emotes",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
@@ -758,7 +821,7 @@ export function setUpCommands(game: Game): void {
             sprite.texture = game.map.sprite.texture;
             const canvas = game.pixi.renderer.extract.canvas(sprite);
             if (canvas.toBlob) {
-                canvas.toBlob((blob) => {
+                canvas.toBlob(blob => {
                     if (blob) window.open(URL.createObjectURL(blob));
                 });
             } else {
@@ -770,6 +833,7 @@ export function setUpCommands(game: Game): void {
         {
             short: "Screenshot the game map texture and open it on a new tab as a blob image",
             long: "Attempts to generate a downloadable image from the minimap's contents, then opening that image in a new tab",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: false }]
         }
     );
@@ -796,7 +860,7 @@ export function setUpCommands(game: Game): void {
             });
 
             if (canvas.toBlob) {
-                canvas.toBlob((blob) => {
+                canvas.toBlob(blob => {
                     if (blob) window.open(URL.createObjectURL(blob));
                 });
             } else {
@@ -807,26 +871,28 @@ export function setUpCommands(game: Game): void {
         {
             short: "Screenshot the game camera and open it on a new tab as a blob image",
             long: "Attempts to take a screenshot of the game without any of its HUD elements, and then attempts to open this image in a new tab",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: false }]
         }
     );
 
     Command.createCommand(
         "disconnect",
-        function(): undefined {
+        function() {
             void this.endGame();
         },
         game,
         {
             short: "Leaves the current game",
             long: "When invoked, the player is disconnected from their current game",
+            allowOnlyWhenGameStarted: true,
             signatures: [{ args: [], noexcept: true }]
         }
     );
 
     Command.createCommand(
         "clear",
-        function(): undefined {
+        function() {
             gameConsole.clear();
         },
         game,
@@ -839,7 +905,7 @@ export function setUpCommands(game: Game): void {
 
     Command.createCommand(
         "clear_history",
-        function(): undefined {
+        function() {
             gameConsole.clearHistory();
         },
         game,
@@ -853,7 +919,7 @@ export function setUpCommands(game: Game): void {
     Command.createCommand(
         "echo",
         function(...messages): undefined {
-            gameConsole.log.raw((messages ?? []).join(" "));
+            gameConsole.log.raw(messages.join(" "));
         },
         game,
         {
@@ -875,7 +941,8 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    const isMac = navigator.userAgent.match(/mac|darwin/ig);
+    Command.createCommand(
         "bind",
         function(key, query) {
             if (key === undefined || query === undefined) {
@@ -892,21 +959,135 @@ export function setUpCommands(game: Game): void {
         {
             short: "Binds an input to an action",
             long:
-                "Given the name of an input (such as a key or mouse button) and a console query, this command establishes a new link between the two.<br>" +
-                'For alphanumeric keys, simply giving the key as-is (e.g. "a", or "1") will do. However, keys with no textual representation, or that represent ' +
-                'punctuation will have to given by name, such as "Enter" or "Period".<br>' +
-                `For mouse buttons, the encodings are as follows:<br><table><tbody>${(
+                "Given the name of an input (such as a key or mouse button) and a console query, this command establishes a new link between the two.<br><p>"
+                + "For alphanumeric keys, simply giving the key as-is (e.g. \"a\", or \"1\") will do. However, keys with no textual representation, or that represent "
+                + "punctuation will have to given by name, such as \"Enter\" or \"Period\".</p><p>"
+                + "Note that actions bound to mouse buttons or the scroll wheel/trackpad will only be triggered when ingame, and that binding to mouse "
+                + "side-buttons is unreliable.</p><p>"
+                + "For the scroll wheel, the encoding is simply <code>MWheel</code>, followed by the capitalized direction (ex: <code>MWheelUp</code>)<br>"
+                + "Remember that if your query contains spaces, you must enclose the whole query in double quotes (\"\") so that it is properly parsed.</p><p>"
+                + "Note that Escape and Backspace may be used to bind actions, but doing so must be done through the console and cannot be done through "
+                + "the settings menu. Also note that Escape will always bring up the pause menu, and that this cannot be changed</p><p>"
+
+                + "<details><summary>Full list of inputs and their corresponding names</summary><ul>"
+
+                + "<li><details><summary>Alphanumeric keys (case insensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"].map(
+                        s => [s, s] as const
+                    )
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "<li><details><summary>Modifier keys, system keys, and others (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    [
+                        ["Shift ⇧", "Shift"],
+                        [isMac ? "Command ⌘" : "Windows ⊞", "Meta"],
+                        [isMac ? "Option ⌥" : "Alt", "Alt"],
+                        [isMac ? "Control ⌃" : "Control", "Control"],
+                        ["Escape ⎋", "Escape"],
+                        ["Backspace ←", "Backspace"],
+                        ["Tab ⇆", "Tab"],
+                        ["Caps Lock ⇪", "CapsLock"],
+                        ["Enter ↵", "Enter"],
+                        ["§", "IntlBackslash"],
+                        ["Left arrow", "ArrowLeft"],
+                        ["Right arrow", "ArrowRight"],
+                        ["Up arrow", "ArrowUp"],
+                        ["Down arrow", "ArrowDown"],
+                        ["Lock numpad", "NumLock"],
+                        ["Home", "Home"],
+                        ["Page up", "PageUp"],
+                        ["Page down", "PageDown"],
+                        ["Clear", "Clear"],
+                        ["End", "End"],
+                        ["Insert", "Insert"],
+                        ["Print Screen", "PrintScreen"],
+                        ["Scroll Lock", "ScrollLock"],
+                        ["Pause", "Pause"],
+                        ["Numpad add", "NumpadAdd"],
+                        ["Numpad subtract", "NumpadSubtract"],
+                        ["Numpad multiply", "NumpadMultiply"],
+                        ["Numpad divide", "NumpadDivide"],
+                        ["Numpad period", "NumpadDecimal"],
+                        ["Numpad equal", "NumpadEqual"],
+                        ["Numpad enter", "NumpadEnter"]
+                    ] as ReadonlyArray<readonly [string, string]>
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody>`
+                + `<tfoot><tr><td colspan=2>Note that for keys appearing in two locations, (namely ${[
+                    "Shift",
+                    isMac ? "Command" : "Windows",
+                    isMac ? "Option" : "Alt",
+                    "Control"
+                ].map(s => `<code>${s}</code>`).join(", ")
+                }) it is possible to bind either the left or right variant only. For example, binding only left Shift `
+                + "can be done with <code>LeftShift</code>, and right Shift can be done with <code>RightShift</code>; in all "
+                + "cases, <code>Shift</code> will allow both the left and right variant to trigger the action</td></tr></tfoot></table>"
+                + "</details></li>"
+
+                + "<li><details><summary>Number pad—<code>NumLock</code> required (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    Array.from(
+                        { length: 10 },
+                        (_, i) => [`Number pad ${i}`, `Numpad${i}`] as const
+                    )
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "<li><details><summary>Punctuation (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    [
+                        ["Hyphen-minus (<code>-</code>)", "Minus"],
+                        ["Equals (<code>=</code>)", "Equals"],
+                        ["Opening square bracket (<code>[</code>)", "BracketLeft"],
+                        ["Closing square bracket (<code>]</code>)", "BracketRight"],
+                        ["Semicolon (<code>;</code>)", "Semicolon"],
+                        ["Quote/apostrophe (<code>'</code>)", "Quote"],
+                        ["Backslash (<code>\\</code>)", "Backslash"],
+                        ["Comma (<code>,</code>)", "Comma"],
+                        ["Period (<code>.</code>)", "Period"],
+                        ["Forward slash (<code>/</code>)", "Slash"],
+                        ["Backtick (<code>`</code>)", "Backquote"]
+                    ] as ReadonlyArray<readonly [string, string]>
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "<li><details><summary>Function keys (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    Array.from(
+                        { length: 24 },
+                        (_, i) => [`F${++i}`, `F${i}`] as const
+                    )
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "<li><details><summary>Mouse buttons (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
                     [
                         ["Primary (usually left click)", "Mouse0"],
                         ["Auxillary (usually middle click)", "Mouse1"],
                         ["Secondary (usually right click)", "Mouse2"],
                         ["Backwards (usually back-left side-button)", "Mouse3"],
                         ["Forwards (usually front-left side-button)", "Mouse4"]
-                    ] as Array<[string, string]>
-                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")
-                }</tbody></table>` +
-                "For the scroll wheel, the encoding is simply <code>MWheel</code>, followed by the capitalized direction (ex: <code>MWheelUp</code>)<br>" +
-                'Remember that if your query contains spaces, you must enclose the whole query in double quotes ("") so that it is properly parsed.',
+                    ] as ReadonlyArray<readonly [string, string]>
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "<li><details><summary>Scroll wheel / trackpad (case sensitive)</summary>"
+                + `<table style="text-align: center"><thead><tr><td>Input</td><td>"Console" name</td></tr></thead><tbody>${(
+                    [
+                        ["Scroll down", "MWheelDown"],
+                        ["Scroll up", "MWheelUp"],
+                        ["Scroll right", "MWheelRight"],
+                        ["Scroll left", "MWheelLeft"],
+                        ["Scroll forwards", "MWheelForwards"],
+                        ["Scroll backwards", "MWheelBackwards"]
+                    ] as ReadonlyArray<readonly [string, string]>
+                ).map(([name, code]) => `<tr><td>${name}</td><td><code>${code}</td></tr>`).join("")}</tbody></table>`
+                + "</details></li>"
+
+                + "</ul></details><br>",
             signatures: [
                 {
                     args: [
@@ -925,7 +1106,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "unbind",
         function(key) {
             if (key === undefined) {
@@ -956,7 +1137,7 @@ export function setUpCommands(game: Game): void {
 
     Command.createCommand(
         "unbind_all",
-        function(): undefined {
+        function() {
             keybinds.unbindAll();
             gameConsole.writeToLocalStorage();
             this.inputManager.generateBindsConfigScreen();
@@ -969,7 +1150,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "alias",
         function(name, query) {
             if (name === undefined || query === undefined) {
@@ -998,12 +1179,12 @@ export function setUpCommands(game: Game): void {
         {
             short: "Creates a shorthand for a console query",
             long:
-                "This command's first argument is the alias' name, and its second is the query; an <em>alias</em> is created, which can be called like any " +
-                "other command. When the alias is called, the query said alias is bound to will be executed, as if it had been entered into the console manually.<br>" +
-                'If the query contains spaces, remember to wrap it in double quotes ("") so it can be parsed correctly. An alias\' name cannot match that ' +
-                "of a built-in command, nor can it start with two alphanumeric characters followed by an underscore (in other words, the name mustn't match " +
-                "<code>^\\w{2}_</code>, because those prefixes may be used for future CVars). However, if it matches an existing alias, said existing alias " +
-                "will be replaced by the new one",
+                "This command's first argument is the alias' name, and its second is the query; an <em>alias</em> is created, which can be called like any "
+                + "other command. When the alias is called, the query said alias is bound to will be executed, as if it had been entered into the console manually.<br>"
+                + 'If the query contains spaces, remember to wrap it in double quotes ("") so it can be parsed correctly. An alias\' name cannot match that '
+                + "of a built-in command, nor can it start with two alphanumeric characters followed by an underscore (in other words, the name mustn't match "
+                + "<code>^\\w{2}_</code>, because those prefixes may be used for future CVars). However, if it matches an existing alias, said existing alias "
+                + "will be replaced by the new one",
             signatures: [
                 {
                     args: [
@@ -1022,14 +1203,19 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "remove_alias",
-        function(name) {
+        function(name, removeInverse) {
             if (name === undefined) {
                 return { err: "Expected a string argument, received nothing" };
             }
 
-            if (!gameConsole.aliases.delete(name)) {
+            if (
+                !gameConsole.aliases.delete(
+                    name,
+                    handleResult(Casters.toBoolean(removeInverse ?? "false"), () => false)
+                )
+            ) {
                 return { err: `No alias by the name of '${name}' exists` };
             }
 
@@ -1038,13 +1224,26 @@ export function setUpCommands(game: Game): void {
         game,
         {
             short: "Removes an alias from the list of aliases",
-            long: "When given the name of an alias, this command removes it from the list of alises if it exists",
+            long:
+                "When given the name of an alias, this command removes it from the list of alises if it exists. If <code>remove_inverse</code> "
+                + "is set to <code>true</code> and the alias pointed to by <code>alias_name</code> is <em>invertible</em> (in other words, has "
+                + "a <code>+</code> form and a <code>-</code> form, like <code>+command</code> and <code>-command</code>), then both aliases will "
+                + "be removed. In this case, <code>alias_name</code> may be either one of the two forms, or the \"base\" name with no +/- (for "
+                + "example, removing <code>+command</code> and <code>-command</code> could be done by calling <code>remove_alias command true</code>, "
+                + "<code>remove_alias +command true</code>, or <code>remove_alias -command true</code>.) If <code>remove_inverse</code> is set to <code>"
+                + "true</code> but the targeted alias is not invertible, the value of <code>remove_inverse</code> is ignored. <code>remove_inverse</code> "
+                + "defaults to <code>false</code>.",
             signatures: [
                 {
                     args: [
                         {
                             name: "alias_name",
                             type: ["string"]
+                        },
+                        {
+                            name: "remove_inverse",
+                            optional: true,
+                            type: ["boolean"]
                         }
                     ],
                     noexcept: false
@@ -1053,7 +1252,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "list_binds",
         function(key) {
             const logBinds = (
@@ -1081,18 +1280,39 @@ export function setUpCommands(game: Game): void {
                     };
                 }
             } else {
-                for (const input of keybinds.listBoundInputs()) {
-                    logBinds(input, keybinds.getActionsBoundToInput(input));
-                }
+                const ul = document.createElement("ul");
+
+                ul.append(
+                    ...keybinds.listBoundInputs()
+                        .map(
+                            input => {
+                                const ul = document.createElement("ul");
+                                ul.append(
+                                    ...keybinds.getActionsBoundToInput(input)
+                                        .map(e => {
+                                            const li = document.createElement("li");
+                                            li.innerText = e;
+                                            return li;
+                                        })
+                                );
+
+                                const wrapper = document.createElement("li");
+                                wrapper.append(input, ul);
+                                return wrapper;
+                            }
+                        )
+                );
+
+                gameConsole.log.raw(ul.outerHTML);
             }
         },
         game,
         {
             short: "Lists all the actions bound to a key, or all the keys and their respective actions",
             long:
-                "If this command is invoked without an argument, all keys which have an action to them will be printed, along with " +
-                "the actions bound to each respective key. If it is invoked with an input's name, then only the actions bound to that input " +
-                "will be shown, if any",
+                "If this command is invoked without an argument, all keys which have an action to them will be printed, along with "
+                + "the actions bound to each respective key. If it is invoked with an input's name, then only the actions bound to that input "
+                + "will be shown, if any",
             signatures: [
                 {
                     args: [],
@@ -1111,7 +1331,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "list_cvars",
         (): undefined => {
             gameConsole.log.raw({
@@ -1122,8 +1342,8 @@ export function setUpCommands(game: Game): void {
         game,
         {
             short: "Prints out the values of CVars",
-            long: "When invoked, will print out every at-the-time registered CVar and its value. The value's color corresponds to its type:" +
-            `<ul>${(
+            long: "When invoked, will print out every at-the-time registered CVar and its value. The value's color corresponds to its type:"
+            + `<ul>${(
                 [
                     [null, "null"],
                     [undefined, "undefined"],
@@ -1132,7 +1352,7 @@ export function setUpCommands(game: Game): void {
                     [false, "boolean"],
                     [5678n, "bigint"],
                     [Symbol.for("efgh"), "symbol"],
-                    [function sin(x: number): void {}, "function"],
+                    [function sin(x: number): void { /* lol ok */ }, "function"],
                     [{}, "object"]
                 ] as Array<[unknown, string]>
             ).map(([val, type]) => `<li><b>${type}</b>: <code class="cvar-value-${type}">${stringify(val)}</code></li>`).join("")}</ul>`,
@@ -1140,7 +1360,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "let",
         (name, value, type, archive, readonly) => {
             if (name === undefined || value === undefined) {
@@ -1202,11 +1422,11 @@ export function setUpCommands(game: Game): void {
         {
             short: "Creates a new custom console variable, with a name and value",
             long:
-                "When invoked, this command attempts to create a new CVar with the given name and value. <b>Names must being with <code>uv_</code>, " +
-                "must be at least one character long (not counting the prefix) and can only contain letters, numbers and underscores.</b> Invalid names will " +
-                "result in an error.<br>" +
-                "CVars marked as <code>archive</code> will be saved when the game closes and reinitialized when the game boots up again. Readonly CVars cannot " +
-                "have their value changed after being created",
+                "When invoked, this command attempts to create a new CVar with the given name and value. <b>Names must being with <code>uv_</code>, "
+                + "must be at least one character long (not counting the prefix) and can only contain letters, numbers and underscores.</b> Invalid names will "
+                + "result in an error.<br>"
+                + "CVars marked as <code>archive</code> will be saved when the game closes and reinitialized when the game boots up again. Readonly CVars cannot "
+                + "have their value changed after being created",
             signatures: [
                 {
                     args: [
@@ -1240,9 +1460,9 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "assign",
-        (name, value) => {
+        (name, value, forceWrite) => {
             if (name === undefined || value === undefined) {
                 return {
                     err: `Expected 2 arguments, received ${arguments.length}`
@@ -1255,15 +1475,20 @@ export function setUpCommands(game: Game): void {
                 };
             }
 
+            const doForceWrite = Casters.toBoolean(forceWrite ?? "false");
+
             const retVal = gameConsole.variables.set(name, value);
-            gameConsole.writeToLocalStorage();
+            gameConsole.writeToLocalStorage({ includeNoArchive: "res" in doForceWrite && doForceWrite.res });
 
             return retVal;
         },
         game,
         {
             short: "Assigns a value to a CVar",
-            long: "When invoked, this command attempts to assign a new value to a CVar",
+            long:
+                "When invoked, this command attempts to assign a new value to a CVar. If the CVar is not archived, its "
+                + "value can still be written to permanent storage by passing <code>true</code> to this command's third "
+                + "parameter",
             signatures: [
                 {
                     args: [
@@ -1274,6 +1499,11 @@ export function setUpCommands(game: Game): void {
                         {
                             name: "value",
                             type: ["string", "number", "boolean"]
+                        },
+                        {
+                            name: "forceWrite",
+                            type: ["boolean"],
+                            optional: true
                         }
                     ],
                     noexcept: false
@@ -1282,7 +1512,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "toggle",
         (name, ...values) => {
             if (name === undefined) {
@@ -1291,13 +1521,12 @@ export function setUpCommands(game: Game): void {
                 };
             }
 
-            if (!gameConsole.variables.has(name)) {
+            let cvar: ConVar<Stringable> | undefined;
+            if ((cvar = gameConsole.variables.get(name)) === undefined) {
                 return {
                     err: `CVar '${name}' doesn't exist`
                 };
             }
-
-            const cvar = gameConsole.variables.get(name)!;
 
             if (values.length === 0) {
                 values = ["true", "false"];
@@ -1311,17 +1540,17 @@ export function setUpCommands(game: Game): void {
                 };
             }
 
-            return cvar.setValue(values[(index + 1) % values.length]);
+            return gameConsole.variables.set(cvar.name, values[(index + 1) % values.length]);
         },
         game,
         {
             short: "Cycles a CVar's value through a set of values",
             long:
-                "When invoked, this command retrieves the CVar designated by <code>name</code>. If its current value is not in " +
-                "<code>values</code>, or if the CVar doesn't exist, an error is thrown. Otherwise, the CVar is assigned to the " +
-                "element in the list following the one corresponding to the current CVar's value. Any errors from this assignment are " +
-                "rethrown by this command. Invoking this command with only a CVar's name is equivalent to passing in <code>true false</code>" +
-                "for <code>values</code>",
+                "When invoked, this command retrieves the CVar designated by <code>name</code>. If its current value is not in "
+                + "<code>values</code>, or if the CVar doesn't exist, an error is thrown. Otherwise, the CVar is assigned to the "
+                + "element in the list following the one corresponding to the current CVar's value. Any errors from this assignment are "
+                + "rethrown by this command. Invoking this command with only a CVar's name is equivalent to passing in <code>true false</code>"
+                + "for <code>values</code>",
             signatures: [
                 {
                     args: [
@@ -1332,6 +1561,7 @@ export function setUpCommands(game: Game): void {
                         {
                             name: "values",
                             type: ["string", "number", "boolean"],
+                            optional: true,
                             rest: true
                         }
                     ],
@@ -1341,7 +1571,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "delete",
         function(name) {
             if (name === undefined) {
@@ -1361,8 +1591,8 @@ export function setUpCommands(game: Game): void {
         {
             short: "Removes a user CVar from the list of variables",
             long:
-                "When given the name of a user variable, this command removes it from the list of variables. " +
-                "Passing in the name of a built-in CVar causes an error",
+                "When given the name of a user variable, this command removes it from the list of variables. "
+                + "Passing in the name of a built-in CVar causes an error",
             signatures: [
                 {
                     args: [
@@ -1377,7 +1607,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "list_alias",
         function(name) {
             if (name === undefined) {
@@ -1386,7 +1616,7 @@ export function setUpCommands(game: Game): void {
 
             const alias = gameConsole.aliases.get(name);
 
-            if (alias) {
+            if (alias !== undefined) {
                 gameConsole.log.raw(`Alias '${name}' is defined as <code>${sanitizeHTML(alias)}</code>`);
             } else {
                 return { err: `No alias named '${name}' exists` };
@@ -1410,7 +1640,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "help",
         function(name) {
             if (name === undefined) {
@@ -1436,7 +1666,7 @@ export function setUpCommands(game: Game): void {
                 main: info.short,
                 detail: [
                     info.long,
-                    ...info.signatures.map((signature) => {
+                    ...info.signatures.map(signature => {
                         const noexcept = "noexcept" in signature && signature.noexcept
                             ? '<span class="command-desc-noexcept">noexcept</span> '
                             : "";
@@ -1444,7 +1674,7 @@ export function setUpCommands(game: Game): void {
                         const args = signature.args.length
                             ? ` ${signature.args
                                 .map(
-                                    (arg) =>
+                                    arg =>
                                         `<em>${arg.rest ? ".." : ""}${arg.name}${arg.optional ? "?" : ""}: ${arg.type
                                             .map(type => `<span class="command-desc-arg-type">${type}</span>`)
                                             .join(" | ")
@@ -1462,24 +1692,24 @@ export function setUpCommands(game: Game): void {
         {
             short: "Displays help about a certain command, or a list of commands and aliases",
             long:
-                // eslint-disable-next-line prefer-template
-                "If given the name of a command, this command logs that command's help info, along with its signatures.<br>" +
-                "The signatures of a command are all the different possible ways in can be invoked. Each signature follows " +
-                "the following format: <code>noexcept-marker? command-name params</code>" +
-                `<ul>${(
+
+                "If given the name of a command, this command logs that command's help info, along with its signatures.<br>"
+                + "The signatures of a command are all the different possible ways in can be invoked. Each signature follows "
+                + "the following format: <code>noexcept-marker? command-name params</code>"
+                + `<ul>${(
                     [
                         ["noexcept-marker", "If included, it indicates that this signature never returns an error. Styled as blue, bold and in italics"],
                         ["command-name", "Simply the command's name. Styled as bold and yellow"],
                         [
                             "params",
-                            "A space-separated list of parameters, where each parameter follows the form <em><code>name: type</code></em>," +
-                            " where <code>name</code> is the parameter's name and <code>type</code> is its data type"
+                            "A space-separated list of parameters, where each parameter follows the form <em><code>name: type</code></em>,"
+                            + " where <code>name</code> is the parameter's name and <code>type</code> is its data type"
                         ]
                     ] as Array<[string, string]>
-                ).map(([name, desc]) => `<li><code>${name}</code>: ${desc}</li>`).join("")}</ul>` +
-                "If not given an argument, this command logs a list of all defined commands and aliases. " +
-                "Passing the name of an alias to this command results in an error. " +
-                "If you want to see the query bound to an alias, use <code>list_alias</code>",
+                ).map(([name, desc]) => `<li><code>${name}</code>: ${desc}</li>`).join("")}</ul>`
+                + "If not given an argument, this command logs a list of all defined commands and aliases. "
+                + "Passing the name of an alias to this command results in an error. "
+                + "If you want to see the query bound to an alias, use <code>list_alias</code>",
             signatures: [
                 {
                     args: [],
@@ -1498,7 +1728,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "throw",
         function(doThrow) {
             if (handleResult(Casters.toBoolean(doThrow ?? "false"), () => false)) {
@@ -1525,7 +1755,7 @@ export function setUpCommands(game: Game): void {
         }
     );
 
-    Command.createCommand<string>(
+    Command.createCommand(
         "dump_client_info",
         function(raw): undefined {
             const data = {
@@ -1555,26 +1785,28 @@ export function setUpCommands(game: Game): void {
                         .replace(/\n| /g, r => ({ "\n": "<br>", " ": "&nbsp;" }[r] ?? ""))
                 );
             } else {
-                const construct = (obj: Record<string, unknown>, namespace = ""): string => {
-                    let retVal = "<ul>";
-
-                    for (const [key, value] of Object.entries(obj)) {
-                        retVal += `<li><b>${key}</b>: ${typeof value === "object" && value !== null ? construct(value as Record<string, unknown>) : String(value)}</li>`;
-                    }
-
-                    return `${retVal}</ul>`;
-                };
-
                 game.console.log.raw(
-                    construct(data)
+                    (function construct(obj: Record<string, unknown>): string {
+                        let retVal = "<ul>";
+
+                        for (const [key, value] of Object.entries(obj)) {
+                            retVal += `<li><b>${key}</b>: ${
+                                typeof value === "object" && value !== null
+                                    ? construct(value as Record<string, unknown>)
+                                    : String(value)
+                            }</li>`;
+                        }
+
+                        return `${retVal}</ul>`;
+                    })(data)
                 );
             }
         },
         game,
         {
             short: "Gives info about the client",
-            long: "Dumps a variety of information about the current client. For debugging purposes. If <code>raw</code> is set to true, " +
-                "the data is outputted as raw JSON; otherwise, it is displayed in a list (default option).",
+            long: "Dumps a variety of information about the current client. For debugging purposes. If <code>raw</code> is set to true, "
+            + "the data is outputted as raw JSON; otherwise, it is displayed in a list (default option).",
             signatures: [
                 {
                     args: [
@@ -1589,4 +1821,12 @@ export function setUpCommands(game: Game): void {
             ]
         }
     );
+
+    gameConsole.handleQuery(`
+        alias +map_ping "+emote_wheel; +map_ping_wheel" & alias -map_ping "-emote_wheel; -map_ping_wheel";\
+        alias toggle_minimap "toggle cv_minimap_minimized";\
+        alias toggle_hud "toggle cv_draw_hud";\
+        alias toggle_map "toggle cv_map_expanded";\
+        alias toggle_console "toggle cv_console_open";
+    `);
 }

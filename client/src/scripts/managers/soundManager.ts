@@ -1,12 +1,5 @@
-import { HealingItems } from "../../../../common/src/definitions/healingItems";
-import { Loots } from "../../../../common/src/definitions/loots";
-import { MapPings } from "../../../../common/src/definitions/mapPings";
 import { Reskins } from "../../../../common/src/definitions/modes";
-import { Materials } from "../../../../common/src/definitions/obstacles";
-import { Throwables } from "../../../../common/src/definitions/throwables";
 import { Numeric } from "../../../../common/src/utils/math";
-import { ItemType } from "../../../../common/src/utils/objectDefinitions";
-import { FloorTypes } from "../../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { MODE } from "../utils/constants";
@@ -90,12 +83,12 @@ export class GameSound {
         if (this.instance && this.position) {
             const diff = Vec.sub(this.manager.position, this.position);
 
-            this.instance.volume = (1 -
-                Numeric.clamp(
-                    Math.abs(Vec.length(diff) / this.maxRange),
-                    0,
-                    1
-                )) ** (1 + this.fallOff * 2) * this.manager.volume;
+            this.instance.volume = (1
+            - Numeric.clamp(
+                Math.abs(Vec.length(diff) / this.maxRange),
+                0,
+                1
+            )) ** (1 + this.fallOff * 2) * this.manager.volume;
 
             this.stereoFilter.pan = Numeric.clamp(diff.x / this.maxRange * -1, -1, 1);
         }
@@ -111,14 +104,18 @@ export class GameSound {
 }
 
 export class SoundManager {
-    readonly game: Game;
     readonly dynamicSounds = new Set<GameSound>();
 
     volume: number;
     position = Vec.create(0, 0);
 
-    constructor(game: Game) {
-        this.game = game;
+    private static _instantiated = false;
+    constructor(readonly game: Game) {
+        if (SoundManager._instantiated) {
+            throw new Error("Class 'SoundManager' has already been instantiated");
+        }
+        SoundManager._instantiated = true;
+
         this.volume = game.console.getBuiltInCVar("cv_sfx_volume");
         this.loadSounds();
     }
@@ -152,88 +149,17 @@ export class SoundManager {
     }
 
     loadSounds(): void {
-        const soundsToLoad: Record<string, string> = {
-            player_hit_1: "audio/sfx/hits/player_hit_1",
-            player_hit_2: "audio/sfx/hits/player_hit_2",
-            gun_click: "audio/sfx/gun_click",
-            swing: "audio/sfx/swing",
-            emote: "audio/sfx/emote",
+        const sounds = import.meta.glob("/public/audio/**/*.mp3");
 
-            door_open: "audio/sfx/door_open",
-            door_close: "audio/sfx/door_close",
-            vault_door_open: "audio/sfx/vault_door_open",
-            generator_starting: "audio/sfx/generator_starting",
-            generator_running: "audio/sfx/generator_running",
-            ceiling_collapse: "audio/sfx/ceiling_collapse",
+        const soundsToLoad: Record<string, string> = {};
 
-            pickup: "audio/sfx/pickup/pickup",
-            ammo_pickup: "audio/sfx/pickup/ammo_pickup",
-            scope_pickup: "audio/sfx/pickup/scope_pickup",
-            helmet_pickup: "audio/sfx/pickup/helmet_pickup",
-            vest_pickup: "audio/sfx/pickup/vest_pickup",
-            backpack_pickup: "audio/sfx/pickup/backpack_pickup",
-            gauze_pickup: "audio/sfx/pickup/gauze_pickup",
-            medikit_pickup: "audio/sfx/pickup/medikit_pickup",
-            cola_pickup: "audio/sfx/pickup/cola_pickup",
-            tablets_pickup: "audio/sfx/pickup/tablets_pickup",
-            throwable_pickup: "audio/sfx/pickup/throwable_pickup",
-
-            usas_explosion: "audio/sfx/usas_explosion",
-
-            kill_leader_assigned: "audio/sfx/kill_leader_assigned",
-            kill_leader_dead: "audio/sfx/kill_leader_dead",
-
-            airdrop_plane: "audio/sfx/airdrop/airdrop_plane",
-            airdrop_fall: "audio/sfx/airdrop/airdrop_fall",
-            airdrop_unlock: "audio/sfx/airdrop/airdrop_unlock",
-            airdrop_land: "audio/sfx/airdrop/airdrop_land",
-            airdrop_land_water: "audio/sfx/airdrop/airdrop_land_water",
-
-            throwable_pin: "audio/sfx/throwable_pin",
-            throwable_throw: "audio/sfx/throwable_throw",
-            frag_grenade: "audio/sfx/frag_grenade",
-            smoke_grenade: "audio/sfx/smoke_grenade",
-
-            button_press: "audio/sfx/button_press",
-            puzzle_error: "audio/sfx/puzzle_error",
-            puzzle_solved: "audio/sfx/puzzle_solved",
-
-            bleed: "audio/sfx/bleed"
-        };
-
-        for (const material of Materials) {
-            soundsToLoad[`${material}_hit_1`] = `audio/sfx/hits/${material}_hit_1`;
-            soundsToLoad[`${material}_hit_2`] = `audio/sfx/hits/${material}_hit_2`;
-            soundsToLoad[`${material}_destroyed`] = `audio/sfx/hits/${material}_destroyed`;
-        }
-
-        for (const gun of Loots.byType(ItemType.Gun)) {
-            if (!gun.isDual) {
-                soundsToLoad[`${gun.idString}_fire`] = `audio/sfx/weapons/${gun.idString}_fire`;
-                soundsToLoad[`${gun.idString}_switch`] = `audio/sfx/weapons/${gun.idString}_switch`;
+        for (const sound in sounds) {
+            const path = sound.split("/");
+            const name = path[path.length - 1].replace(".mp3", "");
+            if (soundsToLoad[name]) {
+                console.warn(`Duplicated sound: ${name}`);
             }
-
-            soundsToLoad[`${gun.idString}_reload`] = `audio/sfx/weapons/${gun.idString}_reload`;
-            if (gun.ballistics.lastShotFX) soundsToLoad[`${gun.idString}_last_shot`] = `audio/sfx/weapons/${gun.idString}_last_shot`;
-        }
-
-        for (const throwable of Throwables) {
-            soundsToLoad[`${throwable.idString}_switch`] = `audio/sfx/weapons/${throwable.idString}_switch`;
-        }
-
-        for (const healingItem of HealingItems) {
-            soundsToLoad[healingItem.idString] = `audio/sfx/healing/${healingItem.idString}`;
-        }
-
-        for (const floorType in FloorTypes) {
-            soundsToLoad[`${floorType}_step_1`] = `audio/sfx/footsteps/${floorType}_1`;
-            soundsToLoad[`${floorType}_step_2`] = `audio/sfx/footsteps/${floorType}_2`;
-        }
-
-        for (const ping of MapPings) {
-            if (ping.sound) {
-                soundsToLoad[ping.idString] = `audio/sfx/pings/${ping.idString}`;
-            }
+            soundsToLoad[name] = sound.replace("/public", "");
         }
 
         for (const key in soundsToLoad) {
@@ -243,7 +169,7 @@ export class SoundManager {
                 path += `_${MODE.reskin}`;
             }
 
-            soundsToLoad[key] = `./${path}.mp3`;
+            soundsToLoad[key] = `.${path}`;
         }
 
         for (const [alias, path] of Object.entries(soundsToLoad)) {
@@ -258,7 +184,8 @@ export class SoundManager {
                 {
                     url: path,
                     preload: true,
-                    loaded(error) {
+                    loaded(error: Error | null) {
+                        // despite what the pixi typings say, logging `error` shows that it can be null
                         if (error !== null && !called) {
                             called = true;
                             console.warn(`Failed to load sound '${alias}' (path '${path}')\nError object provided below`);

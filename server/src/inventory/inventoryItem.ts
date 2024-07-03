@@ -1,6 +1,7 @@
 import { Loots, type LootDefinition, type WeaponDefinition } from "../../../common/src/definitions/loots";
 import { type ItemType, type ReifiableDef, type WearerAttributes } from "../../../common/src/utils/objectDefinitions";
 import { type Player } from "../objects/player";
+import { Events } from "../pluginManager";
 
 /**
  * Represents some item in the player's inventory *that can be equipped*
@@ -12,7 +13,7 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
      */
     readonly category: ItemType;
     /**
-     * The `ObjectType` instance associated with this item
+     * The `WeaponDefinition` instance associated with this item
      */
     readonly definition: Def;
     /**
@@ -20,7 +21,7 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
      */
     readonly owner: Player;
 
-    readonly _modifiers = {
+    private readonly _modifiers = {
         // Multiplicative
         maxHealth: 1,
         maxAdrenaline: 1,
@@ -30,10 +31,25 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
         minAdrenaline: 0
     };
 
+    /**
+     * Returns a clone
+     */
+    // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+    get modifiers() { return { ...this._modifiers }; }
+
     private _isActive = false;
 
     get isActive(): boolean { return this._isActive; }
     set isActive(isActive: boolean) {
+        if (this._isActive !== isActive) {
+            this.owner.game.pluginManager.emit(
+                isActive
+                    ? Events.InvItem_Equip
+                    : Events.InvItem_Unequip,
+                this
+            );
+        }
+
         this._isActive = isActive;
         this.refreshModifiers();
     }
@@ -42,13 +58,6 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
         let kills = 0;
         let damage = 0;
 
-        /*
-            "Assigning a variable to this instead of properly using arrow lambdas
-            may be a symptom of pre-ES6 practices or not managing scope well."
-
-            Object literals are a thing btw
-        */
-        // eslint-disable-next-line @typescript-eslint/no-this-alias
         const T = this;
 
         return {
@@ -67,8 +76,12 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
             }
         };
     })();
+
+    /**
+     * Returns referentially equal to internal
+     */
     // shut the up
-    // eslint-disable-next-line @typescript-eslint/explicit-function-return-type, @typescript-eslint/lines-between-class-members
+    // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
     get stats() { return this._stats; }
 
     protected _lastUse = 0;
@@ -112,14 +125,14 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
      * between these two methods is thus quite important. As with the `useItem` method, subclasses' overrides are fully responsible
      * for taking care of any side-effects such as spawning objects and modifying state.
      */
-    stopUse(): void {}
+    stopUse(): void { /* see doc comment */ }
 
     refreshModifiers(): void {
         const definition = this.definition;
         if (!definition.wearerAttributes) return;
 
         const { active, passive, on } = definition.wearerAttributes;
-        const newModifiers: this["_modifiers"] = {
+        const newModifiers: this["modifiers"] = {
             maxHealth: 1,
             maxAdrenaline: 1,
             baseSpeed: 1,
@@ -154,10 +167,32 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
             }
         }
 
-        this._modifiers.maxHealth = newModifiers.maxHealth;
-        this._modifiers.maxAdrenaline = newModifiers.maxAdrenaline;
-        this._modifiers.minAdrenaline = newModifiers.minAdrenaline;
-        this._modifiers.baseSpeed = newModifiers.baseSpeed;
+        const diff = {
+            maxHealth: this._modifiers.maxHealth !== newModifiers.maxHealth,
+            maxAdrenaline: this._modifiers.maxAdrenaline !== newModifiers.maxAdrenaline,
+            minAdrenaline: this._modifiers.minAdrenaline !== newModifiers.minAdrenaline,
+            baseSpeed: this._modifiers.baseSpeed !== newModifiers.baseSpeed
+        };
+
+        if (Object.values(diff).some(v => v)) {
+            const old = this.modifiers;
+
+            this._modifiers.maxHealth = newModifiers.maxHealth;
+            this._modifiers.maxAdrenaline = newModifiers.maxAdrenaline;
+            this._modifiers.minAdrenaline = newModifiers.minAdrenaline;
+            this._modifiers.baseSpeed = newModifiers.baseSpeed;
+
+            this.owner.game.pluginManager.emit(
+                Events.InvItem_ModifiersChanged,
+                {
+                    item: this,
+                    oldMods: old,
+                    newMods: this.modifiers,
+                    diff
+                }
+            );
+        }
+
         this.owner.updateAndApplyModifiers();
     }
 
@@ -170,8 +205,8 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
         const timeToSwitch = owner.effectiveSwitchDelay - (now - this.switchDate);
 
         if (
-            timeToFire <= 0 &&
-            timeToSwitch <= 0
+            timeToFire <= 0
+            && timeToSwitch <= 0
         ) {
             internalCallback.call(this);
         } else {
@@ -184,8 +219,8 @@ export abstract class InventoryItem<Def extends WeaponDefinition = WeaponDefinit
             owner.bufferedAttack = owner.game.addTimeout(
                 () => {
                     if (
-                        owner.activeItem === this &&
-                        owner.attacking
+                        owner.activeItem === this
+                        && owner.attacking
                     ) {
                         owner.bufferedAttack?.kill();
                         this.useItem();

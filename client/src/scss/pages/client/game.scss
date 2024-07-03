@@ -4,6 +4,7 @@
     user-select: none;
     --webkit-user-select: none;
     position: fixed;
+    touch-action: none;
     top: 0;
     left: 0;
     width: 100%;
@@ -22,43 +23,7 @@
     top: 0;
     left: 0;
     position: absolute;
-    top: 0;
-    left: 0;
     transform-origin: 0 0;
-}
-
-#btn-reload {
-    position: absolute;
-    bottom: 5px;
-
-    @media screen and (max-width: 1500px) {
-        right: 160px;
-    }
-
-    @media screen and (min-width: $screen_large) {
-        width: 70px;
-        height: 60px;
-        bottom: 10px;
-        right: 260px;
-    }
-
-    @media screen and (max-width: $screen_medium) {
-        width: 50px;
-        height: 40px;
-        font-size: 20px;
-        right: 120px;
-    }
-
-    @media screen and (max-width: 460px) {
-        bottom: 3px;
-        right: 3px;
-    }
-
-    z-index: 1000;
-    width: 60px;
-    height: 50px;
-    font-size: 25px;
-    padding: 0;
 }
 
 #btn-close-minimap {
@@ -71,13 +36,18 @@
     position: absolute;
     top: 10px;
     left: 10px;
+    width: 310px;
 
     display: flex;
-    flex-direction: column;
+    flex-direction: unset;
+    flex-wrap: wrap;
 
     @media screen and (max-width: $screen_large) {
         top: 5px;
         left: 5px;
+        flex-direction: unset;
+        flex-wrap: wrap;
+        width: 340px;
 
         .btn-lg {
             height: unset;
@@ -85,10 +55,16 @@
     }
 }
 
+#game-misc-stats {
+    display: flex;
+    flex-wrap: wrap;
+}
+
 #minimap-border {
     display: inline-block;
     width: 220px;
     height: 220px;
+    margin-right: 5px;
 
     border: 10px solid $transparent_bg;
     border-radius: 10px;
@@ -100,8 +76,9 @@
         border-radius: 5px;
     }
 }
+
 #debug-hud {
-    //margin-top: -10px;
+    // margin-top: -10px;
     text-shadow: 1px 1px 2px black;
     font-family: monospace;
 
@@ -109,8 +86,10 @@
         font-size: 14px;
     }
 }
+
 #gas-timer {
     width: 80px;
+    height: 30px;
     padding: 6px 9px 6px 9px;
     margin: 8px 0 8px 0;
     display: flex;
@@ -156,8 +135,10 @@
 
     @media screen and (max-width: $screen_large) {
         padding: 4px 6px 4px 6px;
+        margin: 4px 0 4px 0;
         font-size: 14px;
         width: 60px;
+        height: fit-content;
     }
 }
 
@@ -172,11 +153,27 @@
     top: 50%;
     transform: translateY(-50%);
 
-    @media screen and (max-width: $screen_large) {
+    @media screen and (max-width: $screen_medium) {
+        transform: scale(55%);
+    }
+
+    @media screen and (max-height: 800px) {
+        flex-direction: column;
+        top: 160px;
+        transform: scale(55%);
+        transform-origin: 0% 0%;
+        @media screen and (min-width: $screen_large) {
+            flex-direction: column;
+            left: 240px;
+            top: 20px;
+        }
+    }
+
+    @media screen and (max-height: 465px) and (max-width: $screen-large) {
         flex-direction: row;
-        left: 75px;
-        top: 148px;
-        transform: scale(60%);
+        left: 145px;
+        top: 106px;
+        transform: scale(55%);
         transform-origin: 0% 0%;
     }
 
@@ -190,7 +187,7 @@
         position: relative;
         width: max-content;
 
-        @media screen and (max-width: $screen_large) {
+        @media screen and (max-height: 465px) and (max-width: $screen-large) {
             padding: 7px;
         }
 
@@ -247,8 +244,9 @@
             width: 30px;
         }
 
-        @media screen and (max-width: $screen_large) {
-            .teammate-name, .teammate-badge {
+        @media screen and (max-height: 465px) and (max-width: $screen-large) {
+            .teammate-name,
+            .teammate-badge {
                 display: none;
             }
         }
@@ -268,10 +266,11 @@
     gap: 10px;
     @media screen and (max-width: $screen_large) {
         top: 7px;
-        right: 80px;
+        right: 90px;
         padding: 4px 5px 4px 8px;
         gap: 5px;
-        height: 22px;
+        height: 26px;
+        border-radius: 4px;
     }
 
     @media screen and (max-width: $screen_medium) {
@@ -290,14 +289,13 @@
         }
 
         @media screen and (max-width: $screen_large) {
-            font-size: 12px;
+            font-size: 16px;
 
             .badge-icon {
                 width: 12px;
             }
         }
     }
-
 }
 
 .ui-leaderboard {
@@ -351,13 +349,18 @@
     }
 
     #kill-feed {
-        margin-right: 180px;
+        margin-right: 185px;
         margin-top: -10px;
         @media screen and (max-width: $screen_large) {
-            margin-right: 80px;
+            margin-right: 90px;
+            margin-top: 0px;
         }
-        @media screen and (max-width: $screen_medium) and (max-height: 500px){
+        @media screen and (max-width: $screen_medium) {
+            margin-right: 5px;
+        }
+        @media screen and (max-width: $screen_medium) and (max-height: 500px) {
             margin-top: -40px;
+            margin-right: 80px;
         }
         .kill-feed-item {
             max-width: fit-content;
@@ -408,6 +411,10 @@
 
             &.kill-feed-item-killer {
                 background-color: #0066cc75;
+            }
+
+            &.kill-feed-kill-leader {
+                background-color: #dca03590;
             }
         }
     }
@@ -494,7 +501,7 @@
     @include text-shadow;
 }
 
-#interact-key.active+#interact-text {
+#interact-key.active + #interact-text {
     position: relative;
     top: 3px;
 }
@@ -540,6 +547,14 @@
         width: 100px;
         height: 50px;
         border-radius: 4px;
+        position: relative;
+
+        #weapon-clip-reload-icon {
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            font-size: 14px;
+        }
 
         @media screen and (max-width: $screen_large) {
             width: 75px;
@@ -616,7 +631,7 @@
         background: #ff0000;
     }
 
-    #health-bar-percentage {
+    #health-bar-amount {
         color: #000000;
         font-size: 20px;
 
@@ -640,7 +655,7 @@
     }
 
     .flashing {
-        animation: 0.5s ease-in-out 0.5s infinite flashing
+        animation: 0.5s ease-in-out 0.5s infinite flashing;
     }
 
     @keyframes flashing {
@@ -656,7 +671,6 @@
             background-color: #000000;
         }
     }
-
 }
 
 #adrenaline-bar-container {
@@ -705,7 +719,7 @@
         width: 100%;
     }
 
-    #adrenaline-bar-percentage {
+    #adrenaline-bar-amount {
         color: #ffffff;
         font-size: 14px;
 
@@ -750,16 +764,8 @@
     }
 }
 
-#spectating-container {
-    align-items: center;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
 #spectating-msg {
-    text-align: center;
-    display: flex;
+    align-items: center;
 
     font-weight: bold;
     font-size: 30px;
@@ -767,37 +773,82 @@
 
     @media screen and (max-width: $screen_large) {
         font-size: 14px;
+
+        #btn-spectate-options {
+            display: inline;
+            font-size: 14px;
+            padding: 4px 8px 4px 8px;
+            height: initial;
+        }
     }
 
     #spectating-msg-player {
-        margin-left: 8px;
+        display: inline;
+        margin-left: 3px;
+    }
+
+    #btn-spectate-options {
+        display: inline;
+    }
+
+    .badge-icon {
+        vertical-align: middle;
+        width: 30px;
+        height: 30px;
+        margin-left: 1px;
+        margin-right: 4px;
+        margin-bottom: 3px;
+
+        @media screen and (max-width: $screen_large) {
+            width: 16px;
+            height: 16px;
+        }
     }
 }
 
-#spectating-buttons-container {
+#spectating-container {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 200px;
+
     display: flex;
-    width: 225px;
-    gap: 10px;
+    background: $transparent_bg;
+    border-radius: 12px;
+    width: 250px;
+    margin-top: 5px;
+    padding: 10px;
+    gap: 5px;
     justify-content: space-between;
     flex-wrap: wrap;
+    justify-content: center;
+    z-index: 1002;
 
     @media screen and (max-width: $screen_large) {
-        &>button {
-            height: fit-content;
-            padding: 8px 12px;
+        top: 95px;
+        width: 200px;
+
+        & > button {
             font-size: 14px;
         }
     }
 
-    #btn-spectate-kill-leader {
+    #btn-spectate-kill-leader, #btn-spectate-menu, #btn-spectate-replay {
         width: 100%;
     }
 
-    #btn-spectate-menu {
-        width: 100%;
+    #btn-spectate-previous, #btn-spectate-next {
+        width: 20%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
     }
-    #btn-spectate-replay {
-        width: 100%;
+
+    #btn-report {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-grow: 1;
     }
 }
 
@@ -831,7 +882,7 @@
         }
     }
 
-    #kill-msg-player-name {
+    #kill-msg-cont .kill-msg-player-name {
         font-weight: bold;
         color: $orange;
         @include text-shadow;
@@ -870,6 +921,10 @@
 
     @media screen and (max-width: $screen_large) {
         gap: 3px;
+    }
+
+    @media screen and (max-width: $screen_medium) {
+        gap: 2px;
     }
 
     .inventory-slot {
@@ -912,6 +967,7 @@
 
         &:hover {
             outline: 1px solid $orange;
+            outline-width: 1px !important;
         }
 
         &.active {
@@ -958,8 +1014,8 @@
 
     .item-ammo {
         position: absolute;
-        bottom: 59px;
-        margin-left: -195px;
+        top: 5px;
+        left: 10px;
         float: left;
         z-index: 1;
         font-size: 18px;
@@ -967,13 +1023,13 @@
 
         @media screen and (max-width: $screen_large) {
             font-size: 12px;
-            margin-left: -125px;
+            left: 4px;
             top: 2px;
         }
 
         @media screen and (max-width: $screen_medium) {
             font-size: 10px;
-            margin-left: -93px;
+            left: 2px;
             bottom: 25px;
         }
     }
@@ -994,11 +1050,75 @@
 
         font-size: 20px;
         font-weight: bold;
+        text-wrap: nowrap;
         @include text-shadow;
 
         @media screen and (max-width: $screen_large) {
             font-size: 12px;
         }
+    }
+}
+
+.items-container {
+    position: absolute;
+    flex-direction: column;
+
+    .item-slot {
+        height: 40px;
+        width: 100px;
+
+        &.full .item-count {
+            color: $orange;
+        }
+
+        opacity: 0.75;
+
+        &.has-item {
+            opacity: 1;
+        }
+
+        @media screen and (max-width: $screen_large) {
+            height: 25px;
+            width: 55px;
+            border-radius: 5px;
+        }
+    }
+
+    .item-count {
+        float: right;
+        margin-left: auto;
+    }
+
+    .item-image {
+        width: 40px;
+        height: 30px;
+        @include drop-shadow;
+
+        @media screen and (max-width: $screen_large) {
+            width: 30px;
+            height: 20px;
+        }
+    }
+
+    .inventory-slot .item-tooltip {
+        width: max-content;
+        max-width: 120px;
+
+        left: 110px;
+
+        @media screen and (max-width: $screen_large) {
+            // bottom: 30px;
+            left: 75px;
+        }
+
+        @media screen and (max-width: $screen_small) {
+            // left: 70px;
+            // bottom: 0;
+        }
+    }
+
+    .item-name {
+        right: 5px;
     }
 }
 
@@ -1026,12 +1146,20 @@
 
         @media screen and (max-width: $screen_large) {
             height: 50px;
-            width: 150px;
+            width: 140px;
         }
 
         @media screen and (max-width: $screen_medium) {
             height: 40px;
             width: 110px;
+        }
+
+        .main-container {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
         }
 
         .slot-number, .item-name {
@@ -1041,7 +1169,50 @@
         &.has-item {
             opacity: 1;
             background: hsl(0, 0%, 77%);
-            background: linear-gradient(90deg, hsla(0, 0%, 77%, 0.45) 0%, hsla(0, 0%, 77%, 0.45) 25%, hsla(0, 0%, 9%, 0.5) 100%);
+            background: linear-gradient(
+                90deg,
+                hsla(0, 0%, 77%, 0.45) 0%,
+                hsla(0, 0%, 77%, 0.45) 25%,
+                hsla(0, 0%, 9%, 0.5) 100%
+            );
+        }
+
+        &.locked {
+            .main-container {
+                opacity: 0.6;
+                filter: saturate(0.5);
+            }
+
+            img.lock-icon {
+                display: unset;
+            }
+        }
+
+        & img.lock-icon {
+            display: none;
+            position: absolute;
+            width: 45px;
+        }
+
+        &.active {
+            animation: 0.25s ease-in-out active-pulse;
+            outline-width: 3px !important;
+        }
+
+        @keyframes active-pulse {
+            0% {
+                width: 100%;
+                outline-width: 0px;
+            }
+            50% {
+                width: calc(100% + 2rem);
+                transform: translateX(-2rem);
+                outline-width: 6px;
+            }
+            100% {
+                width: 100%;
+                outline-width: 3px;
+            }
         }
     }
 
@@ -1080,135 +1251,52 @@
     }
 }
 
-.items-container#healing {
-    flex-direction: row;
-    left: 5px;
+#healing-items-container {
+    bottom: 50px;
+    left: 10px;
 
-    .inventory-container {
-        justify-content: end;
+    @media screen and (max-width: $screen_large) {
+        left: 5px;
+    }
 
-        bottom: 50px;
-        @media screen and (max-width: $screen_medium) {
-            bottom: 125px;
-            left: -2px;
-        }
-        @media screen and (max-height: 400px) {
-            bottom: 10px;
-        }
+    @media screen and (max-width: $screen_medium) {
+        bottom: 43px;
+    }
+
+    @media screen and (max-width: 500px) {
+        bottom: 128px;
     }
 }
-.items-container#ammo {
-    flex-direction: row-reverse;
-    right: 5px;
 
-    .inventory-container {
-        justify-content: end;
-        bottom: 450px;
-
-        @media screen and (max-width: $screen_large) {
-            bottom: 300px;
-        }
-
-        @media screen and (max-width: $screen_medium) {
-            bottom: 190px;
-            right: -2px;
-        }
-
-        @media screen and (max-height: 500px) and (max-width: $screen_large) {
-            bottom: 220px;
-        }
-
-        @media screen and (max-width: $screen_small) {
-            bottom: 240px;
-        }
-
-        @media screen and (max-height: 500px) and (max-width: $screen_medium) {
-            bottom: 180px;
-        }
-
-        @media screen and (max-width: 460px) {
-            bottom: 240px;
-        }
-    }
-}
-.items-container {
+#ammos-container {
     position: absolute;
-    top: 120px;
+    bottom: 450px;
+    right: 10px;
 
     display: flex;
-    gap: 25px;
-    flex-direction: column;
+    gap: 5px;
 
-    bottom: 3px;
-    gap: 3px;
-
-    @media screen and (max-width: $screen_small) {
-        flex-direction: row-reverse;
+    @media screen and (min-width: $screen_large) and (max-height: 720px) {
+        bottom: 370px;
     }
 
-    .item-slot {
-        height: 40px;
-        width: 100px;
-
-        &.full .item-count {
-            color: $orange;
-        }
-
-        opacity: 0.75;
-
-        &.has-item {
-            opacity: 1;
-        }
-
-        @media screen and (max-width: $screen_large) {
-            height: 25px;
-            width: 70px;
-            border-radius: 5px;
-        }
+    @media screen and (max-width: $screen_large) {
+        bottom: 220px;
+        right: 5px;
     }
 
-
-    .item-count {
-        float: right;
-        margin-left: auto;
+    @media screen and (max-width: $screen_medium) {
+        bottom: 180px;
     }
 
-    .inventory-container {
-        flex-direction: column;
-        position: relative;
-
-        .item-image {
-            width: 40px;
-            height: 30px;
-            @include drop-shadow;
-
-            @media screen and (max-width: $screen_large) {
-                width: 30px;
-                height: 20px;
-            }
-        }
-
-        .inventory-slot .item-tooltip {
-            width: max-content;
-            max-width: 120px;
-
-            left: 110px;
-
-            @media screen and (max-width: $screen_large) {
-                //bottom: 30px;
-                left: 75px;
-            }
-
-            @media screen and (max-width: $screen_small) {
-                //left: 70px;
-                //bottom: 0;
-            }
-        }
-
-        .item-name {
-            right: 5px;
-        }
+    @media screen and (max-width: 460px) {
+        bottom: 245px;
     }
+}
+
+#ammo-container, #special-ammo-container {
+    position: relative;
+    justify-content: flex-start;
 }
 
 #equipment-container {
@@ -1217,7 +1305,11 @@
     left: 25%;
     transform: translateX(-75%);
     flex-direction: row;
+    z-index: 1002; /* idk what z-index to put here but it needs it because of joysticks-container */
 
+    @media screen and (max-width: $screen_large) {
+        bottom: 5px;
+    }
 
     @media screen and (max-width: $screen_medium) {
         flex-direction: row;
@@ -1228,20 +1320,18 @@
 
     @media screen and (max-width: 500px) {
         flex-direction: column;
-        left: 0;
-    }
-
-    @media screen and (max-height: 400px) and (max-width: $screen_medium) {
-        left: 80px;
     }
 
     .inventory-slot {
         width: 55px;
         height: 78px;
-        margin-left: 3px;
 
         &.has-item {
-            background: radial-gradient(circle, $light_transparent_bg 0%, $transparent_bg 100%);
+            background: radial-gradient(
+                circle,
+                $light_transparent_bg 0%,
+                $transparent_bg 100%
+            );
         }
 
         .item-name {
@@ -1276,6 +1366,10 @@
             .item-name {
                 display: none;
             }
+            .item-tooltip {
+                bottom: 40px;
+                left: -15px;
+            }
         }
 
         .item-image {
@@ -1294,6 +1388,9 @@
                 height: 28px;
             }
         }
+
+        transition-property: width height;
+        transition-duration: 0.25s;
     }
 }
 
@@ -1330,6 +1427,9 @@
                 width: 25px;
                 height: 25px;
             }
+
+            transition-property: width height;
+            transition-duration: 0.25s;
         }
 
         .item-tooltip {
@@ -1362,16 +1462,41 @@
     }
 }
 
+#healing-items-container,
+#ammo-container,
+#special-ammo-container {
+    & .inventory-slot.active {
+        outline-width: 0;
+
+        & .item-image {
+            animation: 0.25s ease-in-out scale-anim;
+        }
+    }
+
+    @keyframes scale-anim {
+        0% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.5);
+        }
+        100% {
+            transform: scale(1);
+        }
+    }
+}
+
 #emote-wheel,
 #emote-customize-wheel {
     position: absolute;
     width: 286px;
     height: 286px;
     transform: translate(-50%, -50%);
+    z-index: 1;
     //noinspection CssUnknownTarget
     background-image: url("/img/misc/emote_wheel.svg");
 
-    &>div {
+    & > div {
         width: 84px;
         height: 84px;
         background-size: 84px 84px;
@@ -1396,6 +1521,13 @@
     .emote-left {
         left: 14px;
         top: 101px;
+    }
+
+    .button-center {
+        width: 42px;
+        height: 42px;
+        left: calc(143px - calc(42px / 2));
+        top: calc(101px + calc(42px / 2));
     }
 }
 
@@ -1556,10 +1688,79 @@
     top: 0;
     left: 0;
     display: flex;
+    z-index: 1000;
 
     div {
         height: 100%;
         width: 50%;
         display: flex;
+    }
+}
+
+#weapons-container,
+#healing-items-container,
+#ammo-container,
+#special-ammo-container,
+#center-top-container,
+#game-menu,
+#mobile-options,
+#emote-wheel,
+#weapon-ammo-container,
+#interact-message,
+#minimap-border,
+#btn-spectate-options,
+#btn-close-minimap {
+    z-index: 1001;
+}
+
+#mobile-options {
+    display: flex;
+    flex-direction: column;
+
+    @media screen and (max-width: $screen_large) {
+        position: relative;
+        bottom: 3px;
+    }
+
+    button {
+        width: 50px;
+    }
+
+    #btn-game-menu {
+        font-size: 16px;
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+
+    #btn-emotes {
+        border-radius: 0;
+        height: 34px;
+        img {
+            width: 18px;
+            position: relative;
+            bottom: 5px;
+        }
+    }
+
+    #btn-toggle-ping {
+        font-size: 16px;
+        border-top-left-radius: 0;
+        border-top-right-radius: 0;
+    }
+}
+
+.pickup-pulse {
+    animation: pickup-pulse 0.25s ease-in-out;
+}
+
+@keyframes pickup-pulse {
+    0% {
+        scale: 100%;
+    }
+    50% {
+        scale: 110%;
+    }
+    100% {
+        scale: 100%;
     }
 }

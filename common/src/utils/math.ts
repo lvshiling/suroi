@@ -4,9 +4,16 @@ import { RectangleHitbox } from "./hitbox";
 import { ObstacleSpecialRoles } from "./objectDefinitions";
 import { Vec, type Vector } from "./vector";
 
-const π = Math.PI;
-const halfπ = π / 2;
-const τ = 2 * π;
+export const π = Math.PI;
+export const halfπ = π / 2;
+export const τ = 2 * π;
+
+// For accessibility
+
+export const PI = π;
+export const HALF_PI = π / 2;
+export const TAU = 2 * π;
+
 export const Angle = Object.freeze({
     /**
      * Draws a line between two points and returns that line's angle
@@ -51,13 +58,6 @@ export const Angle = Object.freeze({
     },
     orientationToRotation(orientation: number): number {
         return -this.normalize(orientation * halfπ);
-    },
-    /**
-     * Converts a unit vector to radians
-     * @param v The vector to convert
-     */
-    unitVectorToRadians(v: Vector) {
-        return Math.atan2(v.y, v.x);
     }
 });
 
@@ -98,7 +98,7 @@ export const Numeric = Object.freeze({
      * @param n2 The second orientation
      * @return The sum of the two `Orientation`s
      */
-    addOrientations(n1: Orientation | number, n2: Orientation | number): Orientation {
+    addOrientations(n1: Orientation, n2: Orientation): Orientation {
         return (n1 + n2) % 4 as Orientation;
     },
 
@@ -106,8 +106,7 @@ export const Numeric = Object.freeze({
      * Remaps a value from a range to another
      */
     remap(value: number, min0: number, max0: number, min1: number, max1: number) {
-        const t = Numeric.clamp((value - min0) / (max0 - min0), 0.0, 1.0);
-        return Numeric.lerp(min1, max1, t);
+        return Numeric.lerp(min1, max1, Numeric.clamp((value - min0) / (max0 - min0), 0, 1));
     }
 });
 
@@ -477,8 +476,8 @@ export const Collision = Object.freeze({
     },
     rectCircleIntersection(min: Vector, max: Vector, pos: Vector, radius: number): CollisionResponse {
         if (
-            min.x <= pos.x && pos.x <= max.x &&
-            min.y <= pos.y && pos.y <= max.y
+            min.x <= pos.x && pos.x <= max.x
+            && min.y <= pos.y && pos.y <= max.y
         ) {
             // circle center inside rectangle
 
@@ -621,8 +620,6 @@ export type CollisionResponse = {
 } | null;
 
 export function calculateDoorHitboxes<
-    // tf are you talking about
-    // eslint-disable-next-line space-before-function-paren
     U extends (ObstacleDefinition & { readonly role: ObstacleSpecialRoles.Door })["operationStyle"]
 >(
     definition: ObstacleDefinition & { readonly role: ObstacleSpecialRoles.Door, readonly operationStyle?: U },
@@ -644,14 +641,20 @@ export function calculateDoorHitboxes<
     switch (definition.operationStyle) {
         case "slide": {
             const openHitbox = Geometry.transformRectangle(
-                Vec.addAdjust(position, Vec.create((definition.hitbox.min.x - definition.hitbox.max.x) * ((definition as Slide).slideFactor ?? 1), 0), rotation),
+                Vec.addAdjust(
+                    position,
+                    Vec.create(
+                        (definition.hitbox.min.x - definition.hitbox.max.x) * ((definition as Slide).slideFactor ?? 1),
+                        0
+                    ),
+                    rotation
+                ),
                 definition.hitbox.min,
                 definition.hitbox.max,
                 1,
                 rotation
             );
 
-            // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
             return {
                 openHitbox: new RectangleHitbox(openHitbox.min, openHitbox.max)
             } as Return;
@@ -673,7 +676,6 @@ export function calculateDoorHitboxes<
                 Numeric.absMod(rotation - 1, 4) as Orientation
             );
 
-            // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
             return {
                 openHitbox: new RectangleHitbox(openRectangle.min, openRectangle.max),
                 openAltHitbox: new RectangleHitbox(openAltRectangle.min, openAltRectangle.max)
@@ -687,7 +689,6 @@ type NameGenerator<T extends string> = `${T}In` | `${T}Out` | `${T}InOut`;
 function generatePolynomialEasingTriplet<T extends string>(degree: number, type: T): { readonly [K in NameGenerator<T>]: (t: number) => number } {
     const coeffCache = 2 ** (degree - 1);
 
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
     return Object.freeze({
         [`${type}In`]: (t: number) => t ** degree,
         [`${type}Out`]: (t: number) => 1 - (1 - t) ** degree,
@@ -727,6 +728,7 @@ export const EaseFunctions = Object.freeze({
         : t < 0.5
             ? -(2 ** (10 * (2 * t - 1) - 1)) * Math.sin(π * (80 * (2 * t - 1) - 9) / 18)
             : 2 ** (-10 * (2 * t - 1) - 1) * Math.sin(π * (80 * (2 * t - 1) - 9) / 18) + 1,
+    elasticOut2: (t: number) => (Math.pow(2, t * -10) * Math.sin(((t - 0.75 / 4) * (π * 2)) / 0.75) + 1),
 
     ...generatePolynomialEasingTriplet(2, "quadratic"),
     ...generatePolynomialEasingTriplet(3, "cubic"),

@@ -13,7 +13,7 @@ export class Decal extends GameObject<ObjectCategory.Decal> {
 
     readonly image: SuroiSprite;
 
-    constructor(game: Game, id: number, data: Required<ObjectsNetData[ObjectCategory.Decal]>) {
+    constructor(game: Game, id: number, data: ObjectsNetData[ObjectCategory.Decal]) {
         super(game, id);
 
         this.image = new SuroiSprite();
@@ -34,7 +34,7 @@ export class Decal extends GameObject<ObjectCategory.Decal> {
         this.container.position.copyFrom(toPixiCoords(this.position));
         this.container.rotation = data.rotation;
 
-        if (FloorTypes[this.game.map.terrain.getFloor(this.position)].overlay && !definition.zIndex) {
+        if (FloorTypes[this.game.map.terrain.getFloor(this.position)].overlay && definition.zIndex === undefined) {
             this.container.zIndex = ZIndexes.UnderWaterDeadObstacles;
         }
     }

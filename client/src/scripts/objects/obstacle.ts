@@ -1,7 +1,8 @@
+import { Graphics } from "pixi.js";
 import { ObjectCategory, ZIndexes } from "../../../../common/src/constants";
 import { type ObstacleDefinition } from "../../../../common/src/definitions/obstacles";
 import { type Orientation, type Variation } from "../../../../common/src/typings";
-import { CircleHitbox, type Hitbox, type RectangleHitbox } from "../../../../common/src/utils/hitbox";
+import { CircleHitbox, RectangleHitbox, type Hitbox } from "../../../../common/src/utils/hitbox";
 import { Angle, EaseFunctions, Numeric, calculateDoorHitboxes } from "../../../../common/src/utils/math";
 import { ObstacleSpecialRoles } from "../../../../common/src/utils/objectDefinitions";
 import { type ObjectsNetData } from "../../../../common/src/utils/objectsSerializations";
@@ -9,9 +10,9 @@ import { randomBoolean, randomFloat, randomRotation } from "../../../../common/s
 import { FloorTypes } from "../../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
-import { HITBOX_COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE } from "../utils/constants";
-import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
 import { type GameSound } from "../managers/soundManager";
+import { HITBOX_COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE, WALL_STROKE_WIDTH } from "../utils/constants";
+import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
 import { GameObject } from "./gameObject";
 import { type ParticleEmitter, type ParticleOptions } from "./particles";
 import { type Player } from "./player";
@@ -28,8 +29,11 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
     definition!: ObstacleDefinition;
     scale!: number;
     variation?: Variation;
-    isDoor!: boolean;
-    door!: {
+
+    /**
+     * `undefined` if this obstacle hasn't been updated yet, or if it's not a door obstacle
+     */
+    private _door?: {
         closedHitbox?: RectangleHitbox
         openHitbox?: RectangleHitbox
         openAltHitbox?: RectangleHitbox
@@ -38,13 +42,24 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
         locked?: boolean
     };
 
+    get door(): {
+        readonly closedHitbox?: RectangleHitbox
+        readonly openHitbox?: RectangleHitbox
+        readonly openAltHitbox?: RectangleHitbox
+        readonly hitbox?: RectangleHitbox
+        readonly offset: number
+        readonly locked?: boolean
+    } | undefined { return this._door; }
+
+    get isDoor(): boolean { return this._door !== undefined; }
+
     activated?: boolean;
     hitbox!: Hitbox;
     orientation: Orientation = 0;
 
     hitSound?: GameSound;
 
-    constructor(game: Game, id: number, data: Required<ObjectsNetData[ObjectCategory.Obstacle]>) {
+    constructor(game: Game, id: number, data: ObjectsNetData[ObjectCategory.Obstacle]) {
         super(game, id);
 
         this.image = new SuroiSprite();
@@ -54,7 +69,7 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
     }
 
     override updateFromData(data: ObjectsNetData[ObjectCategory.Obstacle], isNew = false): void {
-        let texture;
+        let texture: string | undefined;
 
         if (data.full) {
             const full = data.full;
@@ -90,6 +105,11 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                 });
             }
 
+            if (definition.sound && !definition.role && !this.destroyed) {
+                if ("names" in definition.sound) definition.sound.names.forEach(name => this.playSound(name, definition.sound));
+                else this.playSound(definition.sound.name, definition.sound);
+            }
+
             if (this.activated !== full.activated) {
                 this.activated = full.activated;
 
@@ -99,7 +119,8 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                         else this.playSound(definition.sound.name, definition.sound);
                     }
 
-                    // fixme idString check, hard coded behavior
+                    // :martletdeadass:
+                    // FIXME idString check, hard coded behavior
                     if (this.definition.idString === "airdrop_crate_locked") {
                         const options = (minSpeed: number, maxSpeed: number): Partial<ParticleOptions> => ({
                             zIndex: Math.max((this.definition.zIndex ?? ZIndexes.Players) + 1, 4),
@@ -118,7 +139,6 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                             speed: Vec.fromPolar(randomRotation(), randomFloat(minSpeed, maxSpeed))
                         });
 
-                        /* eslint-disable @typescript-eslint/consistent-type-assertions */
                         this.game.particleManager.spawnParticle({
                             frames: "airdrop_particle_1",
                             position: this.position,
@@ -139,8 +159,6 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                 }
             }
 
-            this.isDoor = definition.role === ObstacleSpecialRoles.Door;
-
             this.updateDoor(full, isNew);
         }
 
@@ -152,9 +170,9 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
         const scaleFactor = (this.scale - destroyScale) / ((definition.scale?.spawnMax ?? 1) - destroyScale);
 
         if (this.smokeEmitter) {
-            this.smokeEmitter.active = !this.dead &&
-                // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-                (("emitParticles" in definition && this.activated) || (scaleFactor > 0 && scaleFactor < 0.5));
+            this.smokeEmitter.active = !this.dead
+
+            && (("emitParticles" in definition && this.activated) || (scaleFactor > 0 && scaleFactor < 0.5));
 
             if ("emitParticles" in definition) this.smokeEmitter.delay = 300;
             else this.smokeEmitter.delay = Numeric.lerp(150, 3000, scaleFactor);
@@ -218,7 +236,7 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
             this.container.zIndex = ZIndexes.UnderWaterDeadObstacles;
         }
 
-        if (!this.isDoor) {
+        if (this._door === undefined) {
             this.hitbox = definition.hitbox.transform(this.position, this.scale, this.orientation);
         }
 
@@ -227,19 +245,43 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
 
         this.image.setVisible(!(this.dead && definition.noResidue));
 
-        if (!texture) {
-            texture = !this.dead
-                ? this.activated && definition.frames.activated
-                    ? definition.frames.activated
-                    : definition.frames.base ?? `${definition.idString}`
-                : definition.frames.residue ?? `${definition.idString}_residue`;
-        }
+        texture ??= !this.dead
+            ? this.activated && definition.frames.activated
+                ? definition.frames.activated
+                : definition.frames.base ?? definition.idString
+            : definition.frames.residue ?? `${definition.idString}_residue`;
 
         if (this.variation !== undefined && !this.dead) texture += `_${this.variation + 1}`;
 
-        this.image.setFrame(texture);
+        if (!definition.invisible && !definition.wall && !(this.dead && definition.noResidue)) this.image.setFrame(texture);
 
         if (definition.tint !== undefined) this.image.setTint(definition.tint);
+
+        if (definition.wall && !this.dead && definition.hitbox instanceof RectangleHitbox) {
+            this.container.removeChildren();
+
+            const dimensions = definition.hitbox.clone();
+            dimensions.scale(PIXI_SCALE);
+
+            const wallGraphics = new Graphics();
+
+            const x = dimensions.min.x;
+            const y = dimensions.min.y;
+            const w = dimensions.max.x - dimensions.min.x;
+            const h = dimensions.max.y - dimensions.min.y;
+
+            wallGraphics
+                .rect(x, y, w, h)
+                .fill({ color: definition.wall.borderColor })
+                .roundRect(x + WALL_STROKE_WIDTH, y + WALL_STROKE_WIDTH, w - WALL_STROKE_WIDTH * 2, h - WALL_STROKE_WIDTH * 2, WALL_STROKE_WIDTH)
+                .fill({ color: definition.wall.color });
+
+            this.container.addChild(wallGraphics);
+        }
+        if (definition.wall && this.dead) {
+            this.container.removeChildren();
+            if (!definition.noResidue) this.container.addChild(this.image);
+        }
 
         this.container.rotation = this.rotation;
 
@@ -275,38 +317,46 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
         if (!data?.door || data.definition.role !== ObstacleSpecialRoles.Door) return;
         const definition = data.definition;
 
-        if (!this.door) this.door = { offset: 0 };
+        if (!this._door) this._door = { offset: 0 };
 
         this.rotation = Angle.orientationToRotation(this.orientation);
 
         const hitboxes = calculateDoorHitboxes(definition, this.position, this.orientation);
 
-        this.door.openHitbox = hitboxes.openHitbox;
-        if ("openAltHitbox" in hitboxes) this.door.openAltHitbox = hitboxes.openAltHitbox;
+        this._door.openHitbox = hitboxes.openHitbox;
+        if ("openAltHitbox" in hitboxes) this._door.openAltHitbox = hitboxes.openAltHitbox;
 
-        this.door.locked = definition.locked;
+        this._door.locked = definition.locked;
 
         let backupHitbox = (definition.hitbox as RectangleHitbox).transform(this.position, this.scale, this.orientation);
 
-        this.door.closedHitbox = backupHitbox.clone();
+        this._door.closedHitbox = backupHitbox.clone();
 
         switch (data.door.offset) {
             case 1: {
-                backupHitbox = this.door.openHitbox.clone();
+                backupHitbox = this._door.openHitbox.clone();
                 break;
             }
             case 3: {
-                backupHitbox = this.door.openAltHitbox!.clone();
+                // offset 3 means that this is a "swivel" door, meaning that there is an altHitbox
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                backupHitbox = this._door.openAltHitbox!.clone();
                 break;
             }
         }
-        this.hitbox = this.door.hitbox = backupHitbox;
+        this.hitbox = this._door.hitbox = backupHitbox;
 
         const offset = data.door.offset;
         switch (definition.operationStyle) {
             case "slide":
                 if (isNew) {
-                    const x = offset ? (definition.slideFactor ?? 1) * (backupHitbox.min.x - backupHitbox.max.x) * PIXI_SCALE : 0;
+                    const x = offset
+                        ? (definition.slideFactor ?? 1) * (
+                            this.orientation & 1
+                                ? backupHitbox.min.y - backupHitbox.max.y
+                                : backupHitbox.min.x - backupHitbox.max.x
+                        ) * PIXI_SCALE
+                        : 0;
                     this.image.setPos(x, 0);
                 }
                 break;
@@ -322,11 +372,9 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
         }
 
         if (isNew) {
-            this.door.offset = offset;
-        }
-
-        if (offset !== this.door.offset && !isNew) {
-            this.door.offset = offset;
+            this._door.offset = offset;
+        } else if (offset !== this._door.offset) {
+            this._door.offset = offset;
 
             const soundName = definition.doorSound ?? "door";
             this.playSound(
@@ -344,7 +392,14 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
                     duration: definition.animationDuration ?? 150
                 });
             } else {
-                const x = offset ? (definition.slideFactor ?? 1) * (backupHitbox.min.x - backupHitbox.max.x) * PIXI_SCALE : 0;
+                const x = offset
+                    ? (definition.slideFactor ?? 1) * (
+                        this.orientation & 1
+                            ? backupHitbox.min.y - backupHitbox.max.y
+                            : backupHitbox.min.x - backupHitbox.max.x
+                    ) * PIXI_SCALE
+                    : 0;
+
                 this.game.addTween({
                     target: this.image.position,
                     to: { x, y: 0 },
@@ -356,11 +411,11 @@ export class Obstacle extends GameObject<ObjectCategory.Obstacle> {
 
     canInteract(player: Player): boolean {
         return !this.dead && (
-            (this.isDoor && !this.door?.locked) ||
-            (
-                this.definition.role === ObstacleSpecialRoles.Activatable &&
-                (player.activeItem.idString === this.definition.requiredItem || !this.definition.requiredItem) &&
-                !this.activated
+            (this._door !== undefined && !this._door.locked)
+            || (
+                this.definition.role === ObstacleSpecialRoles.Activatable
+                && (player.activeItem.idString === this.definition.requiredItem || !this.definition.requiredItem)
+                && !this.activated
             )
         );
     }

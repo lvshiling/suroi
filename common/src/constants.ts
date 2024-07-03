@@ -24,27 +24,14 @@ export enum ObjectCategory {
     SyncedParticle
 }
 
-export enum PacketType {
-    Join,
-    Joined,
-    Map,
-    Update,
-    Input,
-    GameOver,
-    Pickup,
-    Ping,
-    Spectate,
-    Report,
-    MapPing
-}
-
 export enum AnimationType {
     None,
     Melee,
+    Downed,
     ThrowableCook,
     ThrowableThrow,
-    Gun,
-    GunAlt,
+    GunFire,
+    GunFireAlt,
     GunClick,
     LastShot,
     Revive
@@ -75,6 +62,9 @@ export enum InputActions {
     DropWeapon,
     DropItem,
     SwapGunSlots,
+    LockSlot,
+    UnlockSlot,
+    ToggleSlotLock,
     Interact,
     Reload,
     Cancel,
@@ -130,17 +120,12 @@ for (const item of [...HealingItems, ...Ammos, ...Scopes, ...Throwables]) {
 
 Object.freeze(DEFAULT_INVENTORY);
 
-const tickrate = 40;
 const inventorySlotTypings = Object.freeze([ItemType.Gun, ItemType.Gun, ItemType.Melee, ItemType.Throwable] as const);
 export const GameConstants = freezeDeep({
     // !!!!! NOTE: Increase this every time a bit stream change is made between latest release and master
     // or a new item is added to a definition list
-    protocolVersion: 21,
+    protocolVersion: 23,
     gridSize: 32,
-    tickrate,
-    // this is fine cause the object is frozen anyways, so
-    // these two attributes can't ever be desynced
-    msPerTick: 1000 / tickrate,
     bleedOutDPMs: 0.002, // === 2 dps
     maxPosition: 1632,
     player: {
@@ -157,6 +142,7 @@ export const GameConstants = freezeDeep({
         reviveTime: 8,
         maxReviveDist: 5
     },
+    lootSpawnDistance: 0.7,
     airdrop: {
         fallTime: 8000,
         flyTime: 30000,

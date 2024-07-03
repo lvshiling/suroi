@@ -15,7 +15,7 @@ export type WeightedItem =
 export interface LootTable {
     readonly min: number
     readonly max: number
-    readonly loot: WeightedItem[] | WeightedItem[][]
+    readonly loot: ReadonlyArray<WeightedItem | readonly WeightedItem[]>
 }
 
 // TODO Refactor loot table system
@@ -43,6 +43,14 @@ export const LootTables: Record<string, LootTable> = {
             // { tier: "winter_skins", weight: 0.4 }, // winter mode
             { tier: "throwables", weight: 0.3 },
             { tier: "melee", weight: 0.04 }
+        ]
+    },
+    hazel_crate: {
+        min: 1,
+        max: 1,
+        loot: [
+            [{ item: "firework_launcher", weight: 1 }],
+            [{ item: "1st_birthday", weight: 1 }]
         ]
     },
     viking_chest: {
@@ -169,12 +177,39 @@ export const LootTables: Record<string, LootTable> = {
             { item: "mosin", weight: 1 }
         ]
     },
+    loot_tree: {
+        min: 1,
+        max: 1,
+        loot: [
+            [
+                { item: "model_37", weight: 1 },
+                { item: "m3k", weight: 1 },
+                { item: "vepr12", weight: 0.2 }
+            ],
+            [{ item: "hatchet", weight: 1 }],
+            [{ item: "lumberjack", weight: 1 }],
+            [{ item: "basic_helmet", weight: 1 }],
+            [{ item: "basic_pack", weight: 1 }],
+            [{ item: "12g", count: 15, weight: 1 }]
+        ]
+    },
     pumpkin: {
         min: 1,
         max: 1,
         loot: [
             { item: "s_g17", weight: 0.95 },
             { item: "usas12", weight: 0.05 }
+        ]
+    },
+    birthday_cake: {
+        min: 1,
+        max: 1,
+        loot: [
+            { tier: "special_guns", weight: 0.25 },
+            { tier: "special_equipment", weight: 0.25 },
+            { item: "1st_birthday", weight: 0.25 },
+            { item: "firework_rocket", weight: 0.2 },
+            { item: "firework_launcher", weight: 0.01 }
         ]
     },
     blueberry_bush: {
@@ -243,6 +278,13 @@ export const LootTables: Record<string, LootTable> = {
         ]
     },
     fridge: {
+        min: 2,
+        max: 3,
+        loot: [
+            { item: "cola", weight: 1 }
+        ]
+    },
+    cooler: {
         min: 2,
         max: 3,
         loot: [
@@ -431,6 +473,23 @@ export const LootTables: Record<string, LootTable> = {
             { item: "curadell", weight: 0.1 }
         ]
     },
+    rocket_box: {
+        min: 1,
+        max: 1,
+        loot: [
+            { item: "firework_rocket", count: 10, weight: 2 },
+            { tier: "ammo", weight: 1 },
+            { item: "curadell", weight: 0.02 }
+        ]
+    },
+    confetti_grenade_box: {
+        min: 1,
+        max: 2,
+        loot: [
+            { item: "confetti_grenade", count: 4, weight: 2 },
+            { tier: "throwables", weight: 1 }
+        ]
+    },
     cabinet: {
         min: 1,
         max: 1,
@@ -448,6 +507,9 @@ export const LootTables: Record<string, LootTable> = {
             { item: "vector", weight: 3 },
             { item: "arx160", weight: 1 },
             { item: "vepr12", weight: 1 },
+            { item: "stoner_63", weight: 0.2 },
+            { item: "negev", weight: 0.15 },
+            { item: "mg5", weight: 0.15 },
             { item: "g19", weight: 0.05 }
         ]
     },
@@ -491,7 +553,7 @@ export const LootTables: Record<string, LootTable> = {
     }
 };
 
-export const LootTiers: Record<string, WeightedItem[]> = {
+export const LootTiers: Record<string, readonly WeightedItem[]> = {
     guns: [
         { item: "g19", weight: 2 },
         { item: "m1895", weight: 1.75 },
@@ -518,6 +580,7 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "stoner_63", weight: 0.005 },
         { item: "radio", weight: 0.005 },
         { item: "mosin", weight: 0.005 },
+        // { item: "firework_launcher", weight: 0.005 }, // birthday mode
         { item: "vector", weight: 0.004 },
         { item: "negev", weight: 0.003 },
         { item: "mg5", weight: 0.003 },
@@ -552,10 +615,12 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "12g", count: 10, weight: 0.75 },
         { item: "556mm", count: 60, weight: 1 },
         { item: "762mm", count: 60, weight: 1 },
+        // { item: "firework_rocket", count: 5, weight: 0.5 }, // birthday mode
         { item: "9mm", count: 60, weight: 1 }
     ],
     throwables: [
         { item: "frag_grenade", count: 2, weight: 1 },
+        // { item: "confetti_grenade", count: 3, weight: 0.1 }, // birthday mode
         { item: "smoke_grenade", count: 2, weight: 1 }
     ],
     special_guns: [
@@ -587,6 +652,7 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "vector", weight: 0.008 },
         { item: "negev", weight: 0.005 },
         { item: "mg5", weight: 0.005 },
+        // { item: "firework_launcher", weight: 0.005 }, // birthday mode
         { item: "tango_51", weight: 0.004 }
     ],
     special_healing_items: [
@@ -655,11 +721,13 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "cz600", weight: 1 },
         { item: "mcx_spear", weight: 0.95 },
         { item: "mosin", weight: 0.95 },
+        // { item: "firework_launcher", weight: 0.9 }, // birthday mode
         { item: "tango_51", weight: 0.9 },
         { item: "stoner_63", weight: 0.9 },
         { item: "radio", weight: 0.1 }
     ],
     gold_airdrop_guns: [
+        // { item: "firework_launcher", weight: 1.2 }, // birthday mode
         { item: "m1_garand", weight: 1.1 },
         { item: "acr", weight: 1 },
         { item: "pp19", weight: 1 },
@@ -691,6 +759,7 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "mcx_spear", weight: 0.75 },
         { item: "mg36", weight: 0.725 },
         { item: "cz600", weight: 0.7 },
+        // { item: "firework_launcher", weight: 0.7 }, // birthday mode
         { item: "vepr12", weight: 0.6 },
         { item: "lewis_gun", weight: 0.6 },
         { item: "mosin", weight: 0.5 },
@@ -705,6 +774,7 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "m16a4", weight: 1 },
         { item: "cz600", weight: 0.75 },
         { item: "mini14", weight: 0.75 },
+        // { item: "firework_launcher", weight: 0.6 }, // birthday mode
         { item: "mcx_spear", weight: 0.55 },
         { item: "sr25", weight: 0.5 },
         { item: "vss", weight: 0.5 },

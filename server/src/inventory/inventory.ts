@@ -8,9 +8,10 @@ import { Loots, type LootDefinition, type WeaponDefinition } from "../../../comm
 import { DEFAULT_SCOPE, Scopes, type ScopeDefinition } from "../../../common/src/definitions/scopes";
 import { Throwables, type ThrowableDefinition } from "../../../common/src/definitions/throwables";
 import { Numeric } from "../../../common/src/utils/math";
-import { type Timeout } from "../../../common/src/utils/misc";
+import { ExtendedMap, type Timeout } from "../../../common/src/utils/misc";
 import { ItemType, type ReferenceTo, type ReifiableDef } from "../../../common/src/utils/objectDefinitions";
-import { type Vector } from "../../../common/src/utils/vector";
+import type { Vector } from "../../../common/src/utils/vector";
+import { type Game } from "../game";
 import { type Player } from "../objects/player";
 import { HealingAction } from "./action";
 import { GunItem } from "./gunItem";
@@ -29,9 +30,6 @@ export const InventoryItemMapping = {
     [ItemType.Melee]: MeleeItem,
     [ItemType.Throwable]: ThrowableItem
 };
-
-/* eslint-disable @typescript-eslint/indent */
-// eslint try not to be braindamaged challenge (impossible)
 
 /**
  * A class representing a player's inventory
@@ -55,28 +53,12 @@ export class Inventory {
         this.owner.dirty.items = true;
     }
 
-    private _throwable?: ThrowableDefinition;
-    get throwable(): ThrowableDefinition | undefined { return this._throwable; }
-    set throwable(throwable: ReifiableDef<ThrowableDefinition>) {
-        this._throwable = Loots.reify<ThrowableDefinition>(throwable);
-    }
-
     /**
-     * Each ThrowableItem instance represents a *type* of throwable, and they need to be
+     * Each {@link ThrowableItem} instance represents a *type* of throwable, and they need to be
      * cycled through. It'd be wasteful to re-instantiate them every time the user swaps
      * throwables, so we cache them here
      */
-    readonly throwableItemMap = (() => {
-        return new (class <K, V> extends Map<K, V> {
-            getAndSetIfAbsent(key: K, fallback: () => V): V {
-                return (
-                    this.has(key)
-                        ? this
-                        : this.set(key, fallback())
-                ).get(key)!;
-            }
-        })<ReferenceTo<ThrowableDefinition>, ThrowableItem>();
-    })();
+    readonly throwableItemMap = new ExtendedMap<ReferenceTo<ThrowableDefinition>, ThrowableItem>();
 
     /**
      * An internal array storing weapons
@@ -92,10 +74,60 @@ export class Inventory {
                 (acc[cur] ??= []).push(i);
                 return acc;
             },
-            // eslint-disable-next-line @typescript-eslint/prefer-reduce-type-parameter, @typescript-eslint/consistent-type-assertions
             {} as Record<ItemType, undefined | number[]>
         )
     );
+
+    private _lockedSlots = 0;
+    get lockedSlots(): number { return this._lockedSlots; }
+
+    private readonly _maskCache = Array.from({ length: GameConstants.player.maxWeapons }, (_, i) => 1 << i);
+
+    isLocked(slot: number): boolean {
+        if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to query lock state of invalid slot '${slot}'`);
+
+        return !!(this._lockedSlots & this._maskCache[slot]);
+    }
+
+    /**
+     * @returns Whether the lock state was changed
+     */
+    lock(slot: number): boolean {
+        if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to lock invalid slot '${slot}'`);
+
+        const mask = this._maskCache[slot];
+        const oldState = !!(this._lockedSlots & mask);
+        this._lockedSlots |= mask;
+
+        this.owner.dirty.slotLocks ||= !oldState;
+
+        return oldState;
+    }
+
+    /**
+     * @returns Whether the lock state was changed
+     */
+    unlock(slot: number): boolean {
+        if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to unlock invalid slot '${slot}'`);
+
+        const mask = this._maskCache[slot];
+        const oldState = !!(this._lockedSlots & mask);
+        this._lockedSlots &= ~mask;
+
+        this.owner.dirty.slotLocks ||= oldState;
+
+        return oldState;
+    }
+
+    lockAll(): void {
+        this._lockedSlots = ~0;
+        this.owner.dirty.slotLocks = true;
+    }
+
+    unlockAll(): void {
+        this._lockedSlots = 0;
+        this.owner.dirty.slotLocks = true;
+    }
 
     /**
      * Private variable storing the index pointing to the last active weapon
@@ -144,8 +176,9 @@ export class Inventory {
             oldItem.stopUse();
         }
 
-        const item = this.weapons[slot]!;
         // nna is fine cuz of the hasWeapon call above
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const item = this.weapons[slot]!;
         const owner = this.owner;
 
         this._reloadTimeout?.kill();
@@ -161,8 +194,8 @@ export class Inventory {
         let effectiveSwitchDelay: number;
 
         if (item.definition.itemType !== ItemType.Gun || (
-            now - owner.lastFreeSwitch >= 1000 &&
-            !item.definition.noQuickswitch
+            now - owner.lastFreeSwitch >= 1000
+            && !item.definition.noQuickswitch
         )) {
             effectiveSwitchDelay = 250;
             owner.lastFreeSwitch = now;
@@ -171,7 +204,7 @@ export class Inventory {
         }
 
         owner.effectiveSwitchDelay = effectiveSwitchDelay;
-        owner.lastSwitch = item.switchDate = now;
+        item.switchDate = now;
 
         if (item instanceof GunItem && item.ammo <= 0) {
             this._reloadTimeout = this.owner.game.addTimeout(
@@ -194,7 +227,9 @@ export class Inventory {
      * Returns this inventory's active weapon
      * It will never be undefined since the only place that sets the active weapon has an undefined check
      */
-    get activeWeapon(): InventoryItem<WeaponDefinition> {
+    get activeWeapon(): InventoryItem {
+        // we hope that it's never undefined
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         return this.weapons[this._activeWeaponIndex]!;
     }
 
@@ -229,14 +264,13 @@ export class Inventory {
     }
 
     /**
-     * Determines whether a given index is valid. For an index to be valid, it must be an integer between 0 and `Inventory.MAX_SIZE - 1` (inclusive)
+     * Determines whether a given index is valid. For an index to be valid, it must be an
+     * integer between 0 and `Inventory.MAX_SIZE - 1` (inclusive)
      * @param slot The number to test
      * @returns Whether the number is a valid slot
      */
     static isValidWeaponSlot(slot: number): boolean {
-        return slot % 0 !== 0 || // If it's not an integer
-            slot < 0 || // Or it's negative
-            slot > GameConstants.player.maxWeapons - 1; // Or it's beyond the max slot number
+        return slot % 1 === 0 && 0 <= slot && slot <= GameConstants.player.maxWeapons - 1;
     }
 
     /**
@@ -268,22 +302,39 @@ export class Inventory {
      * Swaps the items in the gun slots
      */
     swapGunSlots(): void {
-        [this.weapons[0], this.weapons[1]] =
-        [this.weapons[1], this.weapons[0]];
+        [this.weapons[0], this.weapons[1]] = [this.weapons[1], this.weapons[0]];
+
+        if (this.isLocked(0) !== this.isLocked(1)) {
+            const current = this._lockedSlots;
+            this._lockedSlots = (current & ~0b11) | ((current & 0b10) >> 1) | ((current & 0b01) << 1);
+
+            this.owner.dirty.slotLocks = true;
+        }
 
         if (this._activeWeaponIndex < 2) this.setActiveWeaponIndex(1 - this._activeWeaponIndex);
         this.owner.dirty.weapons = true;
+    }
+
+    replaceWeapon(slot: number, item: ReifiableItem): boolean {
+        if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to set item in invalid slot '${slot}'`);
+        if (this.isLocked(slot)) return false;
+
+        if (slot === this.activeWeaponIndex) this.owner.setDirty();
+        this._setWeapon(slot, this._reifyItem(item));
+        return true;
     }
 
     /**
      * Puts a weapon in a certain slot, replacing the old weapon if one was there. If an item is replaced, it is dropped into the game world
      * @param slot The slot in which to insert the item
      * @param item The item to add
+     * @returns Whether the weapon was set in the given slot
      * @throws {RangeError} If `slot` isn't a valid slot number
      */
-    addOrReplaceWeapon(slot: number, item: ReifiableItem): void {
+    addOrReplaceWeapon(slot: number, item: ReifiableItem): boolean {
         if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to set item in invalid slot '${slot}'`);
-        this.owner.setDirty();
+        if (slot === this.activeWeaponIndex) this.owner.setDirty();
+        if (this.isLocked(slot)) return false;
 
         /**
          * `dropWeapon` changes the active item index to something potentially undesirable,
@@ -294,10 +345,10 @@ export class Inventory {
         const slotObj = this.weapons[slot];
         if (
             // If the active weapon is being replaced, then we want to swap to the new item when done
-            (slot === this._activeWeaponIndex && slotObj?.definition.noDrop !== true) ||
+            (slot === this._activeWeaponIndex && slotObj?.definition.noDrop !== true)
 
             // Only melee in inventory, swap to new item's slot
-            this.weaponCount === 1
+            || this.weaponCount === 1
         ) {
             index = slot;
         }
@@ -309,6 +360,8 @@ export class Inventory {
         if (index !== undefined) {
             this.setActiveWeaponIndex(index);
         }
+
+        return true;
     }
 
     /**
@@ -325,8 +378,8 @@ export class Inventory {
 
         for (let slot = 0; slot < maxWeapons; slot++) {
             if (
-                this.weapons[slot] === undefined &&
-                GameConstants.player.inventorySlotTypings[slot] === itemType
+                this.weapons[slot] === undefined
+                && GameConstants.player.inventorySlotTypings[slot] === itemType
             ) {
                 this._setWeapon(slot, item);
                 return slot;
@@ -336,10 +389,11 @@ export class Inventory {
         return -1;
     }
 
-    private _dropItem(toDrop: ReifiableDef<LootDefinition>, options?: { readonly position?: Vector, readonly count?: number, readonly pushForce?: number }): void {
-        this.owner.game
-            .addLoot(toDrop, options?.position ?? this.owner.position, options?.count ?? 1)
-            .push(this.owner.rotation, options?.pushForce ?? -0.03);
+    private _dropItem(
+        toDrop: ReifiableDef<LootDefinition>,
+        options?: Parameters<Game["addLoot"]>[2] & { readonly position?: Vector }
+    ): void {
+        this.owner.game.addLoot(toDrop, options?.position ?? this.owner.position, { ...options, jitterSpawn: false });
     }
 
     removeThrowable(type: ReifiableDef<ThrowableDefinition>, drop = true, removalCount?: number): void {
@@ -355,7 +409,8 @@ export class Inventory {
         }
         this.items.decrementItem(definition.idString, removalAmount);
 
-        if (itemAmount === removalAmount) { // Everything's been dropped, we need to a) discard the ThrowableItem instance b) equip a new one, if any
+        if (itemAmount === removalAmount) {
+            // Everything's been dropped, we need to a) discard the ThrowableItem instance b) equip a new one, if any
             this.throwableItemMap.delete(definition.idString);
 
             // now we gotta find a new throwable to equip
@@ -370,23 +425,32 @@ export class Inventory {
 
             if (!found) {
                 // welp, time to swap to another slot
-                this.weapons[this.slotsByItemType[ItemType.Throwable]![0]] = undefined;
+
+                // if we get here, there's hopefully a throwable slot
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                const slot = this.slotsByItemType[ItemType.Throwable]![0];
+
+                this.unlock(slot);
+                this.weapons[slot] = undefined;
                 this.setActiveWeaponIndex(this._findNextPopulatedSlot());
             }
         } else {
+            // only fails if `throwableItemMap` falls out-of-sync… which hopefully shouldn't happen lol
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             this.throwableItemMap.get(definition.idString)!.count -= removalAmount;
         }
-
-        this.owner.dirty.throwable = true;
     }
 
     /**
      * Drops a weapon from this inventory
      * @param slot The slot to drop
-     * @param pushForce The velocity to push the loot, defaults to -0.03
+     * @param pushVel The velocity to push the loot, defaults to -0.03
      * @returns The item that was dropped, if any
      */
-    dropWeapon(slot: number, pushForce = -0.03): InventoryItem | undefined {
+    dropWeapon(slot: number, pushVel = -0.03): InventoryItem | undefined {
+        if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to drop item from invalid slot '${slot}'`);
+        if (this.isLocked(slot)) return;
+
         const item = this.weapons[slot];
 
         if (item === undefined || item.definition.noDrop) return undefined;
@@ -395,11 +459,11 @@ export class Inventory {
         if (GameConstants.player.inventorySlotTypings[slot] === ItemType.Throwable) {
             this.removeThrowable(definition as ThrowableDefinition, true);
         } else {
-            if (item instanceof GunItem && (definition as DualGunNarrowing).isDual) {
-                this._dropItem((definition as DualGunNarrowing).singleVariant, { pushForce });
-                this._dropItem((definition as DualGunNarrowing).singleVariant, { pushForce });
+            if (item instanceof GunItem && (definition as GunDefinition).isDual) {
+                this._dropItem((definition as DualGunNarrowing).singleVariant, { pushVel });
+                this._dropItem((definition as DualGunNarrowing).singleVariant, { pushVel });
             } else {
-                this._dropItem(definition, { pushForce });
+                this._dropItem(definition, { pushVel });
             }
 
             this._setWeapon(slot, undefined);
@@ -426,14 +490,14 @@ export class Inventory {
 
                     To solve this, we just ignore capacity limits when the player is dead.
                 */
-                const overAmount = Loots.reify<AmmoDefinition>(ammoType).ephemeral ?? this.owner.dead
+                const overAmount = Loots.reify<AmmoDefinition>(ammoType).ephemeral || this.owner.dead
                     ? 0
-                    : this.items.getItem(ammoType) - (this.backpack?.maxCapacity[ammoType] ?? 0);
+                    : this.items.getItem(ammoType) - (this.backpack.maxCapacity[ammoType] ?? 0);
 
                 if (overAmount > 0) {
                     this.items.decrementItem(ammoType, overAmount);
 
-                    this._dropItem(ammoType, { count: overAmount, pushForce });
+                    this._dropItem(ammoType, { count: overAmount, pushVel });
                 }
             }
         }
@@ -449,17 +513,17 @@ export class Inventory {
      * Attempts to drop a item with given `idString`
      * @param itemString The `idString` of the item;
      */
-    dropItem(itemString: ReifiableDef<LootDefinition>, pushForce = -0.03): void {
+    dropItem(itemString: ReifiableDef<LootDefinition>, pushVel = -0.03): void {
         const definition = Loots.reify(itemString);
         const { idString } = definition;
 
         if (
             (
-                !this.items.hasItem(idString) &&
-                definition.itemType !== ItemType.Armor &&
-                definition.itemType !== ItemType.Backpack
-            ) ||
-            definition.noDrop
+                !this.items.hasItem(idString)
+                && definition.itemType !== ItemType.Armor
+                && definition.itemType !== ItemType.Backpack
+            )
+            || definition.noDrop
         ) return;
 
         switch (definition.itemType) {
@@ -468,12 +532,12 @@ export class Inventory {
                 const itemAmount = this.items.getItem(idString);
                 const removalAmount = Math.min(itemAmount, Math.ceil(itemAmount / 2));
 
-                this._dropItem(definition, { pushForce, count: removalAmount });
+                this._dropItem(definition, { pushVel, count: removalAmount });
                 this.items.decrementItem(idString, removalAmount);
                 break;
             }
             case ItemType.Scope: {
-                this._dropItem(definition, { pushForce });
+                this._dropItem(definition, { pushVel });
                 this.items.setItem(idString, 0);
 
                 if (this.scope.idString !== idString) break;
@@ -508,7 +572,7 @@ export class Inventory {
                         break;
                     }
                 }
-                this._dropItem(definition, { pushForce });
+                this._dropItem(definition, { pushVel });
                 break;
             }
             case ItemType.Backpack: {
@@ -550,10 +614,14 @@ export class Inventory {
 
     upgradeToDual(slot: number): boolean {
         if (!Inventory.isValidWeaponSlot(slot)) throw new RangeError(`Attempted to upgrade to dual weapon in invalid slot '${slot}'`);
-        if (!this.hasWeapon(slot) || !(this.weapons[slot] instanceof GunItem)) return false;
+        if (
+            !this.hasWeapon(slot)
+            || !(this.weapons[slot] instanceof GunItem)
+            || this.isLocked(slot)
+        ) return false;
 
         const gun = this.weapons[slot] as GunItem;
-        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+
         if (gun.definition.isDual || gun.definition.dualVariant === undefined) return false;
 
         const dualGun = this._reifyItem(gun.definition.dualVariant) as GunItem;
@@ -572,9 +640,9 @@ export class Inventory {
     }
 
     /**
-     * Forcefully sets a weapon in a given slot. Note that this operation will never leave the inventory empty:
-     * in the case of the attempted removal of this inventory's only item, the operation will be cancelled, and fists will be put in
-     * the melee slot
+     * Forcefully sets a weapon in a given slot, ignoring slot locks. Note that this operation will never leave
+     * the inventory empty: in the case of the attempted removal of this inventory's only item, the operation
+     * will be cancelled, and fists will be put in the melee slot
      *
      * If the only item was fists and an item is added in slots 0 or 1, it will be swapped to
      * @param slot The slot to place the item in
@@ -589,8 +657,10 @@ export class Inventory {
 
         const itemType = item?.definition.itemType;
         const permittedType = GameConstants.player.inventorySlotTypings[slot];
-        if (item !== undefined && permittedType !== itemType) {
-            throw new Error(`Tried to put an item of type '${ItemType[itemType!]}' in slot ${slot} (configured to only accept items of type '${ItemType[permittedType]}')`);
+        if (itemType !== undefined && permittedType !== itemType) {
+            throw new Error(
+                `Tried to put an item of type '${ItemType[itemType]}' in slot ${slot} (configured to only accept items of type '${ItemType[permittedType]}')`
+            );
         }
 
         this.weapons[slot] = item;
@@ -603,6 +673,8 @@ export class Inventory {
             } else if (slot === this._activeWeaponIndex) {
                 this.setActiveWeaponIndex(this._findNextPopulatedSlot());
             }
+
+            this.unlock(slot);
         }
 
         /*
@@ -627,7 +699,11 @@ export class Inventory {
      * Attempts to use a consumable item or a scope with the given `idString`
      * @param itemString The `idString` of the consumable or scope to use
      */
-    useItem(itemString: ReifiableDef<HealingItemDefinition | ScopeDefinition | ThrowableDefinition | ArmorDefinition | AmmoDefinition | BackpackDefinition | AmmoDefinition>): void {
+    useItem(
+        itemString: ReifiableDef<
+            HealingItemDefinition | ScopeDefinition | ThrowableDefinition
+        >
+    ): void {
         const definition = Loots.reify(itemString);
         const idString = definition.idString;
 
@@ -637,15 +713,18 @@ export class Inventory {
             case ItemType.Healing: {
                 if (
                     // Already consuming something else
-                    this.owner.action instanceof HealingAction ||
-                    (
-                        definition.healType === HealType.Health &&
-                        this.owner.health >= this.owner.maxHealth
+                    this.owner.action instanceof HealingAction
+                    || (
+                        definition.healType === HealType.Health
+                        && this.owner.health >= this.owner.maxHealth
                     ) || (
-                        definition.healType === HealType.Adrenaline &&
-                        this.owner.adrenaline >= this.owner.maxAdrenaline
+                        definition.healType === HealType.Adrenaline
+                        && this.owner.adrenaline >= this.owner.maxAdrenaline
                     )
                 ) return;
+
+                // Can't have downed players using consumables
+                if (this.owner.downed) return;
 
                 this.owner.executeAction(new HealingAction(this.owner, idString));
                 break;
@@ -655,12 +734,11 @@ export class Inventory {
                 break;
             }
             case ItemType.Throwable: {
-                this.throwable = idString;
                 this.owner.setDirty();
                 this.owner.dirty.weapons = true;
                 const slot = this.slotsByItemType[ItemType.Throwable]?.[0];
-                // Let's hope there's only one throwable slot…
 
+                // Let's hope there's only one throwable slot…
                 if (slot !== undefined) {
                     const old = this.weapons[slot];
                     if (old) {
@@ -668,7 +746,7 @@ export class Inventory {
                         old.stopUse();
                     }
 
-                    const item = this.throwableItemMap.getAndSetIfAbsent(
+                    const item = this.throwableItemMap.getAndGetDefaultIfAbsent(
                         idString,
                         () => new ThrowableItem(definition, this.owner, this.items.getItem(idString))
                     );
@@ -686,37 +764,41 @@ export class ItemCollection<ItemDef extends LootDefinition> {
     // private readonly _listenerSet = new Set<(key: ReferenceTo<ItemDef>, oldValue: number, newValue: number) => void>();
 
     constructor(entries?: ReadonlyArray<[ReferenceTo<ItemDef>, number]>) {
-        this._internal = new Map<ReferenceTo<ItemDef>, number>(entries);
+        this._internal = new Map(entries);
     }
 
     private _recordCache?: Record<ReferenceTo<ItemDef>, number>;
 
     asRecord(): Record<ReferenceTo<ItemDef>, number> {
-        // eslint-disable-next-line no-return-assign
         return this._recordCache ??= [...this._internal.entries()]
             .reduce(
                 (acc, [item, count]) => {
                     acc[item] = count;
                     return acc;
                 },
-                // can someone remove the "prefer-reduce-type-parameter" one ffs
-                // eslint-disable-next-line @typescript-eslint/prefer-reduce-type-parameter, @typescript-eslint/consistent-type-assertions
                 {} as Record<ReferenceTo<ItemDef>, number>
             );
     }
 
+    /**
+     * Note: It's up to the caller to verify that the item exists via {@link hasItem()}
+     * before calling this method
+     */
     getItem(key: ReferenceTo<ItemDef>): number {
+        // please be responsible enough to call `hasItem` beforehand…
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         return this._internal.get(key)!;
     }
 
     hasItem(key: ReferenceTo<ItemDef>): boolean {
-        return this.getItem(key) > 0;
+        return (this._internal.get(key) ?? -1) > 0;
     }
 
     setItem(key: ReferenceTo<ItemDef>, amount: number): void {
         const old = this.getItem(key);
 
         this._internal.set(key, amount);
+        // warn for decimal amounts?
 
         if (amount !== old) {
             this._recordCache = undefined;

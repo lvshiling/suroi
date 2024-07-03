@@ -16,6 +16,8 @@ export const HITBOX_COLORS = {
     playerWeapon: new Color("lime")
 };
 
+// validated by dv
+// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 export const MODE = Modes.find(m => m.idString === Config.mode)!;
 
 // Converts the strings in the mode definition to Color objects
@@ -25,7 +27,6 @@ export const COLORS = (Object.keys(MODE.colors) as ColorKeys[])
             result[key] = new Color(MODE.colors[key]);
             return result;
         },
-        // eslint-disable-next-line @typescript-eslint/prefer-reduce-type-parameter, @typescript-eslint/consistent-type-assertions
         {} as Record<ColorKeys, Color>
     );
 
@@ -39,6 +40,8 @@ export const TEAMMATE_COLORS = [
 ];
 
 export const PIXI_SCALE = 20;
+
+export const WALL_STROKE_WIDTH = 8;
 
 export const FIRST_EMOTE_ANGLE = Math.atan2(-1, -1);
 export const SECOND_EMOTE_ANGLE = Math.atan2(1, 1);

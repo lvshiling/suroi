@@ -1,4 +1,4 @@
-import { GameConstants, ObjectCategory } from "../../../common/src/constants";
+import { ObjectCategory } from "../../../common/src/constants";
 import { FlyoverPref } from "../../../common/src/definitions/obstacles";
 import { type ThrowableDefinition } from "../../../common/src/definitions/throwables";
 import { CircleHitbox, HitboxType, type RectangleHitbox } from "../../../common/src/utils/hitbox";
@@ -8,6 +8,7 @@ import { FloorTypes } from "../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { type ThrowableItem } from "../inventory/throwableItem";
+import { dragConst } from "../utils/misc";
 import { BaseGameObject, type GameObject } from "./gameObject";
 import { Obstacle } from "./obstacle";
 import { Player } from "./player";
@@ -17,21 +18,18 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
     override readonly fullAllocBytes = 16;
     override readonly partialAllocBytes = 4;
 
-    readonly definition: ThrowableDefinition;
-
     declare readonly hitbox: CircleHitbox;
 
     private _velocity = Vec.create(0, 0);
 
-    public get velocity(): Vector { return this._velocity; }
-    public set velocity(velocity: Partial<Vector>) {
+    get velocity(): Vector { return this._velocity; }
+    set velocity(velocity: Partial<Vector>) {
         this._velocity.x = velocity.x ?? this._velocity.x;
         this._velocity.y = velocity.y ?? this._velocity.y;
     }
 
-    angularVelocity = 0.0035;
-
-    private readonly source: ThrowableItem;
+    private _angularVelocity = 0.0035;
+    get angularVelocity(): number { return this._angularVelocity; }
 
     private readonly _spawnTime: number;
 
@@ -47,14 +45,14 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
      *
      * Precise results obviously depend on the tickrate
      */
-    private static readonly _dragConstant = Math.pow(1.6, -2.7 / GameConstants.tickrate);
+    private static readonly _dragConstant = dragConst(2.79, 1.6);
 
     /**
      * Used for creating extra drag on the projectile, in the same tickrate-independent manner
      *
      * This constant results in a 10% loss every 41.5ms (or a 50% loss every 273.1ms)
      */
-    private static readonly _harshDragConstant = Math.pow(1.6, -5.4 / GameConstants.tickrate);
+    private static readonly _harshDragConstant = dragConst(5.4, 1.6);
 
     override get position(): Vector { return this.hitbox.position; }
 
@@ -78,10 +76,16 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
      */
     private _damagedLastTick = new Set<GameObject>();
 
-    constructor(game: Game, position: Vector, definition: ThrowableDefinition, source: ThrowableItem, radius?: number) {
+    private readonly _dt = this.game.dt;
+
+    constructor(
+        game: Game,
+        position: Vector,
+        readonly definition: ThrowableDefinition,
+        readonly source: ThrowableItem,
+        radius?: number
+    ) {
         super(game, position);
-        this.definition = definition;
-        this.source = source;
         this._spawnTime = this.game.now;
         this.hitbox = new CircleHitbox(radius ?? 1, position);
     }
@@ -96,7 +100,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
         const displacementLength = Vec.length(displacement);
         const maxDisplacement = this.definition.speedCap * halfDt;
 
-        if (displacementLength >= maxDisplacement) {
+        if (displacementLength > maxDisplacement) {
             displacement = Vec.scale(displacement, maxDisplacement / displacementLength);
         }
 
@@ -104,8 +108,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
     }
 
     update(): void {
-        const deltaTime = GameConstants.msPerTick;
-        const halfDt = 0.5 * deltaTime;
+        const halfDt = 0.5 * this._dt;
 
         this.hitbox.position = Vec.add(this.hitbox.position, this._calculateSafeDisplacement(halfDt));
 
@@ -113,7 +116,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
 
         this.hitbox.position = Vec.add(this.hitbox.position, this._calculateSafeDisplacement(halfDt));
 
-        this.rotation = Angle.normalize(this.rotation + this.angularVelocity * deltaTime);
+        this.rotation = Angle.normalize(this.rotation + this._angularVelocity * this._dt);
 
         const impactDamage = this.definition.impactDamage;
         const currentSquaredVel = Vec.squaredLength(this.velocity);
@@ -136,11 +139,9 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
         };
 
         const canFlyOver = (obstacle: Obstacle): boolean => {
-            return flyoverCondMap[
-                obstacle.door?.isOpen === false
-                    ? FlyoverPref.Never
-                    : obstacle.definition.allowFlyover
-            ];
+            return obstacle.door?.isOpen === false
+                ? false
+                : flyoverCondMap[obstacle.definition.allowFlyover];
         };
 
         const damagedThisTick = new Set<GameObject>();
@@ -150,10 +151,10 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
             const isPlayer = object instanceof Player;
 
             if (
-                object.dead ||
-                (
-                    (!isObstacle || !object.collidable) &&
-                    (!isPlayer || !shouldDealImpactDamage || (!this._collideWithOwner && object === this.source.owner))
+                object.dead
+                || (
+                    (!isObstacle || !object.collidable)
+                    && (!isPlayer || !shouldDealImpactDamage || (!this._collideWithOwner && object === this.source.owner))
                 )
             ) continue;
 
@@ -163,7 +164,6 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
             if (isObstacle) {
                 if (collidingWithObject) {
                     let isAbove = false;
-                    // eslint-disable-next-line no-cond-assign
                     if (isAbove = canFlyOver(object)) {
                         this._currentlyAbove.add(object);
                     } else {
@@ -181,11 +181,11 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
             if (!collidingWithObject) continue;
 
             if (shouldDealImpactDamage && !this._damagedLastTick.has(object)) {
-                object.damage(
-                    impactDamage * ((isObstacle ? this.definition.obstacleMultiplier : undefined) ?? 1),
-                    this.source.owner,
-                    this.source
-                );
+                object.damage({
+                    amount: impactDamage * ((isObstacle ? this.definition.obstacleMultiplier : undefined) ?? 1),
+                    source: this.source.owner,
+                    weaponUsed: this.source
+                });
 
                 if (object.dead) {
                     continue;
@@ -207,7 +207,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
                 const collision = Collision.rectCircleIntersection(hitbox.min, hitbox.max, this.position, this.hitbox.radius);
 
                 if (collision) {
-                    this.velocity = Vec.add(
+                    this._velocity = Vec.add(
                         this._velocity,
                         Vec.scale(
                             Vec.project(
@@ -251,11 +251,12 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
                 }
             }
 
-            this.angularVelocity *= 0.6;
+            this._angularVelocity *= 0.6;
         }
 
-        this.position.x = Numeric.clamp(this.position.x, this.hitbox.radius, this.game.map.width - this.hitbox.radius);
-        this.position.y = Numeric.clamp(this.position.y, this.hitbox.radius, this.game.map.height - this.hitbox.radius);
+        const selfRadius = this.hitbox.radius;
+        this.position.x = Numeric.clamp(this.position.x, selfRadius, this.game.map.width - selfRadius);
+        this.position.y = Numeric.clamp(this.position.y, selfRadius, this.game.map.height - selfRadius);
 
         this._collideWithOwner ||= this.game.now - this._spawnTime >= 250;
         this._damagedLastTick = damagedThisTick;
@@ -263,7 +264,7 @@ export class ThrowableProjectile extends BaseGameObject<ObjectCategory.Throwable
         this.setPartialDirty();
     }
 
-    damage(_amount: number, _source?: GameObject): void { }
+    override damage(): void { /* can't damage a throwable projectile */ }
 
     get data(): FullData<ObjectCategory.ThrowableProjectile> {
         return {

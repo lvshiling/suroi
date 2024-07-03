@@ -33,7 +33,7 @@ export type TypedLootDefinition<Type extends ItemType> = LootDefinition & { read
  */
 export class LootDefinitions extends ObjectDefinitions<LootDefinition> {
     private readonly _byTypeMapping: {
-        [K in ItemType]?: Array<TypedLootDefinition<K>>
+        [K in ItemType]?: ReadonlyArray<TypedLootDefinition<K>>
     };
 
     constructor(definitions: ReadonlyArray<RawDefinition<LootDefinition>>) {
@@ -53,8 +53,7 @@ export class LootDefinitions extends ObjectDefinitions<LootDefinition> {
      * @returns All definitions whose `itemType` property match the given one
      */
     byType<Type extends ItemType>(itemType: Type): ReadonlyArray<TypedLootDefinition<Type>> {
-        // eslint-disable-next-line no-return-assign -- skill issue filter (and this one is a compound assignment ffs)
-        return this._byTypeMapping[itemType] ??= [];
+        return [...(this._byTypeMapping[itemType] ?? [])];
     }
 }
 

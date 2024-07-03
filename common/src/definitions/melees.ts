@@ -21,6 +21,8 @@ export interface MeleeDefinition extends InventoryItemDefinition {
     readonly image?: {
         readonly position: Vector
         readonly usePosition: Vector
+        // no relation to the ZIndexes enum
+        readonly zIndex: number
         readonly angle?: number
         readonly useAngle?: number
         readonly lootScale?: number
@@ -28,6 +30,11 @@ export interface MeleeDefinition extends InventoryItemDefinition {
     }
     readonly fireMode: FireMode
 }
+
+export const DEFAULT_HAND_RIGGING = Object.freeze({
+    left: Vec.create(38, -35),
+    right: Vec.create(38, 35)
+}) as InventoryItemDefinition["fists"] & object;
 
 export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
     defaultTemplate => ({
@@ -37,6 +44,9 @@ export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
             killstreak: false,
             speedMultiplier: 1,
             maxTargets: 1,
+            image: {
+                zIndex: 1
+            },
             fireMode: FireMode.Single
         })
     })
@@ -54,11 +64,11 @@ export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
             fists: {
                 animationDuration: 125,
                 randomFist: true,
-                left: Vec.create(38, -35),
-                right: Vec.create(38, 35),
+                ...DEFAULT_HAND_RIGGING,
                 useLeft: Vec.create(75, -10),
                 useRight: Vec.create(75, 10)
-            }
+            },
+            image: undefined
         },
         {
             idString: "baseball_bat",
@@ -81,6 +91,30 @@ export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
                 angle: 155,
                 useAngle: 45,
                 lootScale: 0.55
+            }
+        },
+        {
+            idString: "hatchet",
+            name: "Hatchet",
+            damage: 25,
+            obstacleMultiplier: 2.5,
+            piercingMultiplier: 0.5,
+            radius: 2,
+            offset: Vec.create(5.4, -0.5),
+            cooldown: 350,
+            fists: {
+                animationDuration: 150,
+                left: Vec.create(40, -25),
+                right: Vec.create(40, 15),
+                useLeft: Vec.create(35, -35),
+                useRight: Vec.create(75, -20)
+            },
+            image: {
+                position: Vec.create(42, 20),
+                usePosition: Vec.create(80, -25),
+                angle: 135,
+                useAngle: 65,
+                lootScale: 0.6
             }
         },
         {
@@ -134,6 +168,7 @@ export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
             idString: "steelfang",
             name: "Steelfang",
             damage: 40,
+            noDrop: true,
             obstacleMultiplier: 1,
             piercingMultiplier: 1,
             radius: 2.7,
@@ -155,7 +190,7 @@ export const Melees = ObjectDefinitions.create<MeleeDefinition>()(
             },
             wearerAttributes: {
                 passive: {
-                    speedBoost: 1.5
+                    speedBoost: 1.1
                 }
             }
         },

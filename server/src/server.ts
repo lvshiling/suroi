@@ -1,10 +1,13 @@
+import { Cron } from "croner";
 import { existsSync, readFile, writeFile, writeFileSync } from "fs";
 import { URLSearchParams } from "node:url";
 import os from "os";
 import { type WebSocket } from "uWebSockets.js";
+import { isMainThread } from "worker_threads";
 import { GameConstants, TeamSize } from "../../common/src/constants";
 import { Badges } from "../../common/src/definitions/badges";
 import { Skins } from "../../common/src/definitions/skins";
+import { type GetGameResponse } from "../../common/src/typings";
 import { Numeric } from "../../common/src/utils/math";
 import { version } from "../../package.json";
 import { Config } from "./config";
@@ -13,28 +16,35 @@ import { CustomTeam, CustomTeamPlayer, type CustomTeamPlayerContainer } from "./
 import { Logger } from "./utils/misc";
 import { cors, createServer, forbidden, getIP, textDecoder } from "./utils/serverHelpers";
 import { cleanUsername } from "./utils/usernameFilter";
-import { isMainThread } from "worker_threads";
-import { type GetGameResponse } from "../../common/src/typings";
-import { Cron } from "croner";
 
 export interface Punishment {
-    readonly type: "warning" | "tempBan" | "permaBan"
+    readonly id: string
+    readonly ip: string
+    readonly reportId: string
+    readonly reason: string
+    readonly reporter: string
     readonly expires?: number
+    readonly punishmentType: "warn" | "temp" | "perma"
 }
 
-let punishments: Record<string, Punishment> = {};
+let punishments: Punishment[] = [];
 
 let ipBlocklist: string[] | undefined;
 
 function removePunishment(ip: string): void {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    delete punishments[ip];
-    if (!Config.protection?.punishments?.url) {
+    punishments = punishments.filter(p => p.ip !== ip);
+
+    if (Config.protection?.punishments?.url) {
+        fetch(
+            `${Config.protection.punishments.url}/punishments/${ip}`,
+            { method: "DELETE", headers: { "api-key": Config.protection.punishments.password } }
+        ).catch(err => console.error("Error removing punishment from server. Details:", err));
+    } else {
         writeFile(
             "punishments.json",
             JSON.stringify(punishments, null, 4),
             "utf8",
-            (err) => {
+            err => {
                 if (err) console.error(err);
             }
         );
@@ -50,14 +60,14 @@ let maxTeamSizeSwitchCron: Cron | undefined;
 
 if (isMainThread) {
     // Initialize the server
-    createServer().get("/api/serverInfo", (res) => {
+    createServer().get("/api/serverInfo", res => {
         cors(res);
         res
             .writeHeader("Content-Type", "application/json")
             .end(JSON.stringify({
-                playerCount: games.reduce((a, b) => (a + (b?.data?.aliveCount ?? 0)), 0),
+                playerCount: games.reduce((a, b) => (a + (b?.data.aliveCount ?? 0)), 0),
                 maxTeamSize,
-                // eslint-disable-next-line @typescript-eslint/unbound-method
+
                 nextSwitchTime: maxTeamSizeSwitchCron?.nextRun()?.getTime(),
                 protocolVersion: GameConstants.protocolVersion
             }));
@@ -70,19 +80,21 @@ if (isMainThread) {
 
         let response: GetGameResponse;
 
-        const punishment = punishments[ip];
+        const punishment = punishments.find(p => p.ip === ip);
         if (punishment) {
-            if (punishment.type === "warning") {
+            if (punishment.punishmentType === "warn") {
                 const protection = Config.protection;
                 if (protection?.punishments?.url) {
-                    fetch(`${protection.punishments.url}/api/removePunishment?ip=${ip}`, { headers: { Password: protection.punishments.password } })
-                        .catch(e => console.error("Error acknowledging warning. Details: ", e));
+                    fetch(
+                        `${protection.punishments.url}/punishments/${ip}`,
+                        { headers: { "api-key": protection.punishments.password } }
+                    ).catch(e => console.error("Error acknowledging warning. Details: ", e));
                 }
                 removePunishment(ip);
             }
-            response = { success: false, message: punishment.type };
+            response = { success: false, message: punishment.punishmentType, reason: punishment.reason, reportID: punishment.reportId };
         } else if (ipBlocklist?.includes(ip)) {
-            response = { success: false, message: "permaBan" };
+            response = { success: false, message: "perma" };
         } else {
             const teamID = new URLSearchParams(req.getQuery()).get("teamID");
             if (teamID) {
@@ -95,7 +107,7 @@ if (isMainThread) {
                     response = { success: false };
                 }
             } else {
-                response = await findGame();
+                response = findGame();
             }
 
             if (response.success) {
@@ -116,24 +128,6 @@ if (isMainThread) {
         } else {
             forbidden(res);
         }
-    }).post("/api/addPunishment", (res, req) => {
-        cors(res);
-
-        res.onAborted(() => {});
-
-        const password = req.getHeader("password");
-        res.onData((data) => {
-            if (password === Config.protection?.punishments?.password) {
-                const body = textDecoder.decode(data);
-                punishments = {
-                    ...punishments,
-                    ...JSON.parse(body)
-                };
-                res.writeStatus("204 No Content").endWithoutBody(0);
-            } else {
-                forbidden(res);
-            }
-        });
     }).get("/api/removePunishment", (res, req) => {
         cors(res);
 
@@ -151,31 +145,37 @@ if (isMainThread) {
          * Upgrade the connection to WebSocket.
          */
         upgrade(res, req, context) {
-            /* eslint-disable-next-line @typescript-eslint/no-empty-function */
-            res.onAborted((): void => { });
+            res.onAborted((): void => { /* (why is this handler here?) */ });
 
             const searchParams = new URLSearchParams(req.getQuery());
 
             const teamID = searchParams.get("teamID");
 
-            if (maxTeamSize === TeamSize.Solo || (teamID && !customTeams.has(teamID))) {
+            let team!: CustomTeam;
+            const noTeamIdGiven = teamID !== null;
+            if (
+                maxTeamSize === TeamSize.Solo
+                || (
+                    noTeamIdGiven
+                    // @ts-expect-error cleanest overall way to do this (`undefined` gets filtered out anyways)
+                    && (team = customTeams.get(teamID)) === undefined
+                )
+            ) {
                 forbidden(res);
                 return;
             }
 
-            let team: CustomTeam;
             let isLeader: boolean;
-            if (!teamID) {
-                isLeader = true;
-                team = new CustomTeam();
-                customTeams.set(team.id, team);
-            } else {
+            if (noTeamIdGiven) {
                 isLeader = false;
-                team = customTeams.get(teamID)!;
-                if (team.locked || team.players.length >= maxTeamSize) {
+                if (team.locked || team.players.length >= (maxTeamSize as number)) {
                     forbidden(res); // TODO "Team is locked" and "Team is full" messages
                     return;
                 }
+            } else {
+                isLeader = true;
+                team = new CustomTeam();
+                customTeams.set(team.id, team);
             }
 
             const name = cleanUsername(searchParams.get("name"));
@@ -191,10 +191,10 @@ if (isMainThread) {
             let nameColor: number | undefined;
 
             if (
-                password !== null &&
-                givenRole !== null &&
-                givenRole in Config.roles &&
-                Config.roles[givenRole].password === password
+                password !== null
+                && givenRole !== null
+                && givenRole in Config.roles
+                && Config.roles[givenRole].password === password
             ) {
                 role = givenRole;
 
@@ -202,7 +202,7 @@ if (isMainThread) {
                     try {
                         const colorString = searchParams.get("nameColor");
                         if (colorString) nameColor = Numeric.clamp(parseInt(colorString), 0, 0xffffff);
-                    } catch {}
+                    } catch { /* lol your color sucks */ }
                 }
             }
 
@@ -253,6 +253,8 @@ if (isMainThread) {
          */
         message(socket: WebSocket<CustomTeamPlayerContainer>, message: ArrayBuffer) {
             const player = socket.getUserData().player;
+            // we pray
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             void player.team.onMessage(player, JSON.parse(textDecoder.decode(message)));
         },
 
@@ -295,13 +297,10 @@ if (isMainThread) {
             Logger.log(perfString);
         }, 60000);
 
-        if (typeof Config.maxTeamSize === "object") {
-            maxTeamSizeSwitchCron = Cron(Config.maxTeamSize.switchSchedule, () => {
-                teamSizeRotationIndex++;
-                // @ts-expect-error maxTeamSize must be an object here
-                teamSizeRotationIndex %= Config.maxTeamSize.rotation.length;
-                // @ts-expect-error maxTeamSize must be an object here
-                maxTeamSize = Config.maxTeamSize.rotation[teamSizeRotationIndex];
+        const teamSize = Config.maxTeamSize;
+        if (typeof teamSize === "object") {
+            maxTeamSizeSwitchCron = Cron(teamSize.switchSchedule, () => {
+                maxTeamSize = teamSize.rotation[teamSizeRotationIndex = (teamSizeRotationIndex + 1) % teamSize.rotation.length];
 
                 const humanReadableTeamSizes = [undefined, "solos", "duos", "trios", "squads"];
                 Logger.log(`Switching to ${humanReadableTeamSizes[maxTeamSize] ?? `team size ${maxTeamSize}`}`);
@@ -315,7 +314,10 @@ if (isMainThread) {
                     void (async() => {
                         try {
                             if (!protection.punishments?.url) return;
-                            const response = await fetch(`${protection.punishments.url}/api/punishments`, { headers: { Password: protection.punishments.password } });
+                            const response = await fetch(`${protection.punishments.url}/punishments`, { headers: { "api-key": protection.punishments.password } });
+
+                            // we hope that this is safe
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                             if (response.ok) punishments = await response.json();
                             else console.error("Error: Unable to fetch punishment list.");
                         } catch (e) {
@@ -325,31 +327,40 @@ if (isMainThread) {
                 } else {
                     if (!existsSync("punishments.json")) writeFileSync("punishments.json", "{}");
                     readFile("punishments.json", "utf8", (error, data) => {
-                        if (!error) {
-                            try {
-                                punishments = data.trim() === "" ? {} : JSON.parse(data);
-                            } catch (e) {
-                                console.error("Error: Unable to parse punishment list. Details:", e);
-                            }
-                        } else {
+                        if (error) {
                             console.error("Error: Unable to load punishment list. Details:", error);
+                            return;
+                        }
+
+                        try {
+                            // we also hope that this is safe
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                            punishments = data.trim().length ? JSON.parse(data) : [];
+                        } catch (e) {
+                            console.error("Error: Unable to parse punishment list. Details:", e);
                         }
                     });
                 }
 
                 const now = Date.now();
-                for (const [ip, punishment] of Object.entries(punishments)) {
-                    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-                    if (punishment.expires && punishment.expires < now) delete punishments[ip];
+
+                for (let i = 0; i < punishments.length; i++) {
+                    const punishment = punishments[i];
+                    if (punishment.expires && new Date(punishment.expires).getTime() < now) {
+                        punishments.splice(i, 1);
+                        i--;
+                    }
                 }
 
                 Logger.log("Reloaded punishment list");
             }, protection.refreshDuration);
 
-            if (protection.ipBlocklistURL) {
+            const ipBlocklistURL = protection.ipBlocklistURL;
+
+            if (ipBlocklistURL !== undefined) {
                 void (async() => {
                     try {
-                        const response = await fetch(protection.ipBlocklistURL!);
+                        const response = await fetch(ipBlocklistURL);
                         ipBlocklist = (await response.text()).split("\n").map(line => line.split("/")[0]);
                     } catch (e) {
                         console.error("Error: Unable to load IP blocklist. Details:", e);

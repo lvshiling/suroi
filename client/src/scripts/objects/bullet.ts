@@ -1,12 +1,15 @@
+import { BloomFilter } from "pixi-filters";
 import { Color } from "pixi.js";
+import { ObjectCategory, ZIndexes } from "../../../../common/src/constants";
 import { BaseBullet, type BulletOptions } from "../../../../common/src/utils/baseBullet";
 import { Geometry } from "../../../../common/src/utils/math";
+import { random, randomFloat, randomRotation } from "../../../../common/src/utils/random";
+import { Vec } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { MODE, PIXI_SCALE } from "../utils/constants";
 import { SuroiSprite, toPixiCoords } from "../utils/pixi";
 import { type Obstacle } from "./obstacle";
 import { type Player } from "./player";
-import { ObjectCategory } from "../../../../common/src/constants";
 
 export class Bullet extends BaseBullet {
     readonly game: Game;
@@ -16,6 +19,8 @@ export class Bullet extends BaseBullet {
 
     private _trailReachedMaxLength = false;
     private _trailTicks = 0;
+
+    private _lastParticleTrail = Date.now();
 
     constructor(game: Game, options: BulletOptions) {
         super(options);
@@ -32,10 +37,20 @@ export class Bullet extends BaseBullet {
         this.maxLength = this.image.width * this.tracerLength;
         this.image.scale.y = tracerStats.width;
         this.image.alpha = tracerStats.opacity / (this.reflectionCount + 1);
+        if (this.game.console.getBuiltInCVar("cv_cooler_graphics")) {
+            this.image.filters = new BloomFilter({
+                strength: 5
+            });
+        }
 
         if (!tracerStats.particle) this.image.anchor.set(1, 0.5);
 
-        const color = new Color(tracerStats.color ?? 0xffffff);
+        const white = 0xFFFFFF;
+        const color = new Color(
+            tracerStats.color === -1
+                ? random(0, white)
+                : tracerStats.color ?? white
+        );
         if (MODE.bulletTrailAdjust) color.multiply(MODE.bulletTrailAdjust);
 
         this.image.tint = color;
@@ -99,9 +114,42 @@ export class Bullet extends BaseBullet {
 
         this.image.setVPos(toPixiCoords(this.position));
 
+        this.particleTrail();
+
         if (this._trailTicks <= 0 && this.dead) {
             this.destroy();
         }
+    }
+
+    particleTrail(): void {
+        if (!this.definition.trail) return;
+        if (!this.game.console.getBuiltInCVar("cv_cooler_graphics")) return;
+        if (Date.now() - this._lastParticleTrail < this.definition.trail.interval) return;
+
+        const trail = this.definition.trail;
+        this.game.particleManager.spawnParticles(
+            trail.amount ?? 1,
+            () => ({
+                frames: trail.frame,
+                speed: Vec.fromPolar(
+                    randomRotation(),
+                    randomFloat(trail.spreadSpeed.min, trail.spreadSpeed.max)
+                ),
+                position: this.position,
+                lifetime: random(trail.lifetime.min, trail.lifetime.max),
+                zIndex: ZIndexes.Bullets - 1,
+                scale: randomFloat(trail.scale.min, trail.scale.max),
+                alpha: {
+                    start: randomFloat(trail.alpha.min, trail.alpha.max),
+                    end: 0
+                },
+                tint: trail.tint === -1
+                    ? new Color({ h: random(0, 6) * 60, s: 60, l: 70 }).toNumber()
+                    : trail.tint
+            })
+        );
+
+        this._lastParticleTrail = Date.now();
     }
 
     destroy(): void {

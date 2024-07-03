@@ -1,13 +1,13 @@
 import { Container, Graphics } from "pixi.js";
-import { GameConstants, type ObjectCategory } from "../../../../common/src/constants";
+import { type ObjectCategory } from "../../../../common/src/constants";
 import { Angle, Numeric } from "../../../../common/src/utils/math";
 import { type Timeout } from "../../../../common/src/utils/misc";
 import { type ObjectsNetData } from "../../../../common/src/utils/objectsSerializations";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
+import { type GameSound, type SoundOptions } from "../managers/soundManager";
 import { HITBOX_DEBUG_MODE } from "../utils/constants";
 import { toPixiCoords } from "../utils/pixi";
-import { type GameSound, type SoundOptions } from "../managers/soundManager";
 
 export abstract class GameObject<Cat extends ObjectCategory = ObjectCategory> {
     id: number;
@@ -37,10 +37,9 @@ export abstract class GameObject<Cat extends ObjectCategory = ObjectCategory> {
 
     updateContainerPosition(): void {
         if (
-            this.destroyed ||
-            this._oldPosition === undefined ||
-            this._lastPositionChange === undefined ||
-            this.container.position === undefined
+            this.destroyed
+            || this._oldPosition === undefined
+            || this._lastPositionChange === undefined
         ) return;
 
         this.container.position = toPixiCoords(
@@ -48,7 +47,7 @@ export abstract class GameObject<Cat extends ObjectCategory = ObjectCategory> {
                 this._oldPosition,
                 this.position,
                 Math.min(
-                    (Date.now() - this._lastPositionChange) / GameConstants.msPerTick,
+                    (Date.now() - this._lastPositionChange) / this.game.serverDt,
                     1
                 )
             )
@@ -72,15 +71,14 @@ export abstract class GameObject<Cat extends ObjectCategory = ObjectCategory> {
 
     updateContainerRotation(): void {
         if (
-            this._oldRotation === undefined ||
-            this._lastRotationChange === undefined ||
-            this.container.rotation === undefined
+            this._oldRotation === undefined
+            || this._lastRotationChange === undefined
         ) return;
 
         this.container.rotation = Numeric.lerp(
             this._oldRotation,
             this._oldRotation + Angle.minimize(this._oldRotation, this._rotation),
-            Math.min(((Date.now() - this._lastRotationChange) / GameConstants.msPerTick), 1)
+            Math.min(((Date.now() - this._lastRotationChange) / this.game.serverDt), 1)
         );
     }
 

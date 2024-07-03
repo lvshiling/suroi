@@ -1,51 +1,54 @@
-import { GameConstants, InputActions, PacketType } from "../constants";
+import { GameConstants, InputActions } from "../constants";
 import { type AmmoDefinition } from "../definitions/ammos";
 import { type ArmorDefinition } from "../definitions/armors";
 import { type BackpackDefinition } from "../definitions/backpacks";
 import { type EmoteDefinition, Emotes } from "../definitions/emotes";
 import { type HealingItemDefinition } from "../definitions/healingItems";
 import { Loots } from "../definitions/loots";
-import { type MapPingDefinition, MapPings } from "../definitions/mapPings";
+import { type MapPingDefinition, MapPings, type PlayerPing } from "../definitions/mapPings";
 import { type ScopeDefinition } from "../definitions/scopes";
 import { type ThrowableDefinition } from "../definitions/throwables";
 import { calculateEnumPacketBits, type SuroiBitStream } from "../utils/suroiBitStream";
 import { type Vector } from "../utils/vector";
-import { AbstractPacket } from "./packet";
-
-/* eslint-disable @typescript-eslint/indent */
+import { type Packet } from "./packet";
 
 const INPUT_ACTIONS_BITS = calculateEnumPacketBits(InputActions);
 
+/**
+ * {@linkcode InputAction}s requiring no additional parameter
+ */
+export type SimpleInputActions = Exclude<
+    InputActions,
+    InputActions.EquipItem
+    | InputActions.DropWeapon
+    | InputActions.DropItem
+    | InputActions.UseItem
+    | InputActions.Emote
+    | InputActions.MapPing
+    | InputActions.LockSlot
+    | InputActions.UnlockSlot
+    | InputActions.ToggleSlotLock
+>;
+
 export type InputAction = {
-    readonly type: InputActions.UseItem | InputActions.DropItem
+    readonly type: InputActions.UseItem
+    readonly item: HealingItemDefinition | ScopeDefinition | ThrowableDefinition
+} | {
+    readonly type: InputActions.DropItem
     readonly item: HealingItemDefinition | ScopeDefinition | ThrowableDefinition | ArmorDefinition | BackpackDefinition | AmmoDefinition
 } | {
-    readonly type: InputActions.EquipItem | InputActions.DropWeapon
+    readonly type: InputActions.EquipItem | InputActions.DropWeapon | InputActions.LockSlot | InputActions.UnlockSlot | InputActions.ToggleSlotLock
     readonly slot: number
 } | {
     readonly type: InputActions.Emote
     readonly emote: EmoteDefinition
 } | {
     readonly type: InputActions.MapPing
-    readonly ping: MapPingDefinition
+    readonly ping: PlayerPing
     readonly position: Vector
-} | {
-    readonly type: Exclude<
-        InputActions,
+} | { readonly type: SimpleInputActions };
 
-        InputActions.EquipItem |
-        InputActions.DropWeapon |
-        InputActions.DropItem |
-        InputActions.UseItem |
-        InputActions.Emote |
-        InputActions.MapPing
-    >
-};
-
-export class InputPacket extends AbstractPacket {
-    override readonly allocBytes = 24;
-    override readonly type = PacketType.Input;
-
+export class InputPacket implements Packet {
     movement!: {
         up: boolean
         down: boolean
@@ -67,7 +70,7 @@ export class InputPacket extends AbstractPacket {
 
     actions: InputAction[] = [];
 
-    override serialize(stream: SuroiBitStream): void {
+    serialize(stream: SuroiBitStream): void {
         stream.writeBoolean(this.movement.up);
         stream.writeBoolean(this.movement.down);
         stream.writeBoolean(this.movement.left);
@@ -89,12 +92,15 @@ export class InputPacket extends AbstractPacket {
             }
         }
 
-        stream.writeArray(this.actions, 3, (action) => {
+        stream.writeArray(this.actions, 3, action => {
             stream.writeBits(action.type, INPUT_ACTIONS_BITS);
 
             switch (action.type) {
                 case InputActions.EquipItem:
                 case InputActions.DropWeapon:
+                case InputActions.LockSlot:
+                case InputActions.UnlockSlot:
+                case InputActions.ToggleSlotLock:
                     stream.writeBits(action.slot, 2);
                     break;
                 case InputActions.DropItem:
@@ -114,7 +120,7 @@ export class InputPacket extends AbstractPacket {
         });
     }
 
-    override deserialize(stream: SuroiBitStream): void {
+    deserialize(stream: SuroiBitStream): void {
         this.movement = {
             up: stream.readBoolean(),
             down: stream.readBoolean(),
@@ -142,7 +148,7 @@ export class InputPacket extends AbstractPacket {
 
         // Actions
         stream.readArray(this.actions, 3, () => {
-            const type = stream.readBits(INPUT_ACTIONS_BITS);
+            const type: InputActions = stream.readBits(INPUT_ACTIONS_BITS);
 
             let slot: number | undefined;
             let item: HealingItemDefinition | ScopeDefinition | ArmorDefinition | AmmoDefinition | BackpackDefinition | undefined;
@@ -153,6 +159,9 @@ export class InputPacket extends AbstractPacket {
             switch (type) {
                 case InputActions.EquipItem:
                 case InputActions.DropWeapon:
+                case InputActions.LockSlot:
+                case InputActions.UnlockSlot:
+                case InputActions.ToggleSlotLock:
                     slot = stream.readBits(2);
                     break;
                 case InputActions.DropItem:
@@ -170,7 +179,7 @@ export class InputPacket extends AbstractPacket {
                     break;
             }
 
-            return { type, item, slot, emote, ping, position };
+            return { type, item, slot, emote, ping, position } as InputAction;
         });
     }
 

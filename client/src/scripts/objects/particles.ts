@@ -8,10 +8,12 @@ export class ParticleManager {
     readonly particles = new Set<Particle>();
     readonly emitters = new Set<ParticleEmitter>();
 
-    readonly game: Game;
-
-    constructor(game: Game) {
-        this.game = game;
+    private static _instantiated = false;
+    constructor(readonly game: Game) {
+        if (ParticleManager._instantiated) {
+            throw new Error("Class 'ParticleManager' has already been instantiated");
+        }
+        ParticleManager._instantiated = true;
     }
 
     update(delta: number): void {
@@ -21,6 +23,7 @@ export class ParticleManager {
             if (particle.dead) {
                 this.particles.delete(particle);
                 particle.image.destroy();
+                particle.options.onDeath?.(particle);
             }
         }
 
@@ -38,7 +41,7 @@ export class ParticleManager {
     }
 
     spawnParticle(options: ParticleOptions): Particle {
-        const particle = new Particle(options);
+        const particle = new Particle(this, options);
         this.particles.add(particle);
         this.game.camera.addObject(particle.image);
         return particle;
@@ -75,6 +78,8 @@ export interface ParticleOptions {
     readonly scale?: ParticleProperty
     readonly alpha?: ParticleProperty
     readonly rotation?: ParticleProperty
+    readonly tint?: number
+    readonly onDeath?: (particle: Particle) => void
 }
 
 export class Particle {
@@ -87,7 +92,8 @@ export class Particle {
     private readonly _deathTime = Date.now();
     get deathTime(): number { return this._deathTime; }
 
-    dead = false;
+    private _dead = false;
+    get dead(): boolean { return this._dead; }
 
     readonly options: ParticleOptions;
 
@@ -95,12 +101,13 @@ export class Particle {
     alpha: number;
     rotation: number;
 
-    constructor(options: ParticleOptions) {
+    constructor(readonly manager: ParticleManager, options: ParticleOptions) {
         this._deathTime = this._spawnTime + options.lifetime;
         this.position = options.position;
         const frames = options.frames;
         const frame = typeof frames === "string" ? frames : frames[random(0, frames.length - 1)];
         this.image = new SuroiSprite(frame);
+        this.image.tint = options.tint ?? 0xffffff;
         this.image.setZIndex(options.zIndex);
 
         this.scale = typeof options.scale === "number" ? options.scale : 1;
@@ -117,7 +124,7 @@ export class Particle {
         const now = Date.now();
         let interpFactor: number;
         if (now >= this._deathTime) {
-            this.dead = true;
+            this._dead = true;
             interpFactor = 1;
         } else {
             interpFactor = (now - this._spawnTime) / options.lifetime;
@@ -138,6 +145,12 @@ export class Particle {
         this.image.position.copyFrom(toPixiCoords(this.position));
         this.image.scale.set(this.scale);
         this.image.setRotation(this.rotation).setAlpha(this.alpha);
+    }
+
+    kill(): void {
+        this._dead = true;
+        this.manager.particles.delete(this);
+        this.image.destroy();
     }
 }
 

@@ -49,15 +49,15 @@ export interface BuildingDefinition extends ObjectDefinition {
         readonly landCheckDist: number
     }
 
-    readonly obstacles: BuildingObstacle[]
-    readonly lootSpawners: LootSpawner[]
-    readonly subBuildings: SubBuilding[]
-    readonly decals: BuildingDecal[]
+    readonly obstacles: readonly BuildingObstacle[]
+    readonly lootSpawners: readonly LootSpawner[]
+    readonly subBuildings: readonly SubBuilding[]
+    readonly decals: readonly BuildingDecal[]
 
     readonly puzzle?: {
         readonly triggerInteractOn: ReferenceTo<ObstacleDefinition>
         readonly interactDelay: number
-        readonly order?: string[]
+        readonly order?: readonly string[]
         readonly solvedSound?: boolean
         /**
          * Don't wait for the interact delay before setting solved to true
@@ -73,7 +73,7 @@ export interface BuildingDefinition extends ObjectDefinition {
         readonly falloff: number
     }
 
-    readonly floorImages: Array<{
+    readonly floorImages: ReadonlyArray<{
         readonly key: string
         readonly position: Vector
         readonly rotation?: number
@@ -81,7 +81,7 @@ export interface BuildingDefinition extends ObjectDefinition {
         readonly tint?: number | `#${string}`
     }>
 
-    readonly ceilingImages: Array<{
+    readonly ceilingImages: ReadonlyArray<{
         readonly key: string
         readonly position: Vector
         readonly residue?: string
@@ -94,12 +94,12 @@ export interface BuildingDefinition extends ObjectDefinition {
      */
     readonly wallsToDestroy: number
 
-    readonly floors: Array<{
+    readonly floors: ReadonlyArray<{
         readonly type: keyof typeof FloorTypes
         readonly hitbox: Hitbox
     }>
 
-    readonly groundGraphics: Array<{
+    readonly groundGraphics: ReadonlyArray<{
         readonly color: number | `#${string}`
         readonly hitbox: Hitbox
     }>
@@ -128,6 +128,20 @@ const warehouseObstacle = {
     regular_crate: 2,
     barrel: 2,
     flint_crate: 1
+};
+
+const fireworkWarehouseObstacle = {
+    regular_crate: 3,
+    barrel: 1,
+    super_barrel: 1,
+    ammo_crate: 2,
+    rocket_box: 1,
+    confetti_grenade_box: 1
+};
+
+const randomBarrel = {
+    super_barrel: 1,
+    barrel: 2
 };
 
 export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
@@ -337,6 +351,46 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
             lootSpawners: [
                 { table: "ground_loot", position: Vec.create(18.48, 6.37) },
                 { table: "ground_loot", position: Vec.create(-23.91, -18.07) }
+            ]
+        },
+        {
+            idString: "firework_warehouse",
+            name: "Firework Warehouse",
+            spawnHitbox: RectangleHitbox.fromRect(110, 70),
+            scopeHitbox: RectangleHitbox.fromRect(65, 48),
+            floorImages: [{
+                key: "firework_warehouse",
+                position: Vec.create(0, 0)
+            }],
+            ceilingImages: [{
+                key: "firework_warehouse_ceiling",
+                position: Vec.create(0, 0)
+            }],
+            floors: [
+                {
+                    type: "stone",
+                    hitbox: RectangleHitbox.fromRect(65, 48, Vec.create(0, 0))
+                }
+            ],
+            obstacles: [
+                { idString: "firework_warehouse_exterior", position: Vec.create(0, 0), rotation: 0 },
+                { idString: randomBarrel, position: Vec.create(-27, 18) },
+                { idString: randomBarrel, position: Vec.create(27, -18) },
+                { idString: "window", position: Vec.create(32.4, 0), rotation: 2 },
+                { idString: "window", position: Vec.create(-32.4, 0), rotation: 2 },
+                { idString: "door", position: Vec.create(-0.47, 23), rotation: 2 },
+                { idString: "door", position: Vec.create(0.47, -23), rotation: 0 },
+                { idString: "confetti_grenade_box", position: Vec.create(29, -12) },
+                { idString: "rocket_box", position: Vec.create(-29, 12) },
+                { idString: "confetti_grenade_box", position: Vec.create(-27, 7) },
+                { idString: "rocket_box", position: Vec.create(-22, 9) },
+                { idString: fireworkWarehouseObstacle, position: Vec.create(-17, 17) },
+                { idString: fireworkWarehouseObstacle, position: Vec.create(17, -17) },
+                { idString: "ammo_crate", position: Vec.create(26.8, 17) },
+                { idString: fireworkWarehouseObstacle, position: Vec.create(-26.8, -17) },
+                { idString: { box: 9, grenade_box: 1 }, position: Vec.create(18.8, 14) },
+                { idString: "confetti_grenade_box", position: Vec.create(20, 19) },
+                { idString: "hazel_crate", position: Vec.create(0, 0) }
             ]
         },
         {
@@ -1259,7 +1313,7 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
         {
             idString: "oil_tanker_ship",
             name: "Oil Tanker",
-            spawnHitbox: RectangleHitbox.fromRect(110, 300, Vec.create(0, 0)),
+            spawnHitbox: RectangleHitbox.fromRect(110, 300),
             scopeHitbox: new HitboxGroup(
                 RectangleHitbox.fromRect(65, 29, Vec.create(4.5, -102.5)),
                 RectangleHitbox.fromRect(7.5, 28, Vec.create(41.7, -101.5))
@@ -1354,7 +1408,21 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "super_barrel", position: Vec.create(43, -7.5) },
                 { idString: "sandbags", position: Vec.create(30, -16), rotation: 2 },
                 { idString: "flint_crate", position: Vec.create(41, -35) }
-            ] as BuildingObstacle[]
+            ] as BuildingObstacle[],
+            subBuildings: [
+                { idString: "oil_tanker_ship_vault", position: Vec.create(-17.6, -102.6) }
+            ]
+        },
+        {
+            idString: "oil_tanker_ship_vault",
+            name: "Oil Tanker Ship Vault",
+            spawnHitbox: RectangleHitbox.fromRect(22.73, 28.32),
+            scopeHitbox: RectangleHitbox.fromRect(22.73, 28.32),
+            ceilingZIndex: ZIndexes.BuildingsCeiling - 1,
+            ceilingImages: [{
+                key: "oil_tanker_ship_vault_ceiling",
+                position: Vec.create(0, 0)
+            }]
         },
         {
             idString: "port",
@@ -1600,7 +1668,7 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "pallet", position: Vec.create(-50, -55), rotation: 1 },
 
                 { idString: { flint_crate: 1, regular_crate: 1 }, position: Vec.create(-75, -45) },
-                { idString: "flint_crate", position: Vec.create(-50, -55.38) },
+                { idString: "flint_crate", position: Vec.create(-50, -55) },
 
                 // Top right corner above crane of the port
                 { idString: { regular_crate: 3, grenade_crate: 1 }, position: Vec.create(108, -110) },
@@ -1930,7 +1998,7 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "ammo_crate", position: Vec.create(29.5, -0.45), rotation: 0 },
                 { idString: "ammo_crate", position: Vec.create(12.85, -0.45), rotation: 0 },
                 { idString: "tear_gas_crate", position: Vec.create(21.2, -0.45), rotation: 1 },
-                { idString: "grenade_crate", position: Vec.create(-9.1, -15.9), rotation: 0 },
+                { idString: "grenade_crate", position: Vec.create(-9.1, -15.9) },
                 ...Array.from(
                     { length: 4 },
                     (_, i) => ({
@@ -2082,7 +2150,7 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "regular_crate", position: Vec.create(-64.29, 76.5) },
                 { idString: "regular_crate", position: Vec.create(65.01, -56.73) },
                 { idString: "regular_crate", position: Vec.create(8.45, -66.79) },
-                { idString: "flint_crate", position: Vec.create(33.86, -46.16), rotation: 0 },
+                { idString: "flint_crate", position: Vec.create(33.86, -46.16) },
                 { idString: "barrel", position: Vec.create(-10.72, -7.93) },
                 { idString: "barrel", position: Vec.create(9.13, 40.34) },
                 { idString: "barrel", position: Vec.create(69.75, 42.55) },
@@ -2102,8 +2170,8 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "gun_case", position: Vec.create(19.48, 36.69), rotation: 0 },
                 { idString: "tear_gas_crate", position: Vec.create(16.55, 9.68), rotation: 0 },
                 { idString: "tear_gas_crate", position: Vec.create(33.06, -62.76), rotation: 0 },
-                { idString: "grenade_crate", position: Vec.create(-55.29, 78.02), rotation: 0 },
-                { idString: "grenade_crate", position: Vec.create(69.81, -34.24), rotation: 0 },
+                { idString: "grenade_crate", position: Vec.create(-55.29, 78.02) },
+                { idString: "grenade_crate", position: Vec.create(69.81, -34.24) },
                 { idString: "ammo_crate", position: Vec.create(50.07, -20.07), rotation: 0 },
                 { idString: "barrier", position: Vec.create(13.91, 70.32), rotation: 1 },
 
@@ -2388,16 +2456,58 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
         {
             idString: "large_bridge",
             name: "Large Bridge",
-            spawnHitbox: RectangleHitbox.fromRect(60, 230),
+            spawnHitbox: RectangleHitbox.fromRect(105, 230),
             bridgeSpawnOptions: {
                 minRiverWidth: 20,
                 maxRiverWidth: 100,
-                landCheckDist: 30
+                landCheckDist: 103
             },
-            floorImages: [{
-                key: "large_bridge",
-                position: Vec.create(0, 0)
-            }],
+            floorImages: [
+                {
+                    key: "large_bridge_railing",
+                    position: Vec.create(23.3, -38)
+                },
+                {
+                    key: "large_bridge_railing",
+                    position: Vec.create(23.3, 35.3),
+                    rotation: Math.PI,
+                    scale: Vec.create(-1, 1)
+                },
+                {
+                    key: "large_bridge_railing",
+                    position: Vec.create(-23.3, -38),
+                    scale: Vec.create(-1, 1)
+                },
+                {
+                    key: "large_bridge_railing",
+                    position: Vec.create(-23.3, 35.3),
+                    rotation: Math.PI
+                }
+            ],
+            groundGraphics: [
+                {
+                    color: "#5d5d5d",
+                    hitbox: RectangleHitbox.fromRect(44.77, 211.1)
+                },
+                {
+                    color: "#4d4d4d",
+                    hitbox: RectangleHitbox.fromRect(43.77, 210.1)
+                },
+                {
+                    color: "#5d5d5d",
+                    hitbox: RectangleHitbox.fromRect(3.61, 210.1)
+                }
+            ],
+            decals: [
+                { idString: "floor_oil_02", position: Vec.create(5.28, -66.1) },
+                { idString: "floor_oil_03", position: Vec.create(-12.06, 23.49), rotation: 1 },
+                { idString: "smoke_explosion_decal", position: Vec.create(-12.96, -49.37) },
+                { idString: "explosion_decal", position: Vec.create(15.91, -2.56) },
+                { idString: "explosion_decal", position: Vec.create(-8.65, 42.84) },
+                { idString: "explosion_decal", position: Vec.create(-2.11, 85.37) },
+                { idString: "frag_explosion_decal", position: Vec.create(-4.31, -91.09) },
+                { idString: "smoke_explosion_decal", position: Vec.create(11.09, 75.08) }
+            ],
             floors: [
                 { type: "stone", hitbox: RectangleHitbox.fromRect(45, 210, Vec.create(0, 0)) }
             ],
@@ -2411,18 +2521,18 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "sandbags", position: Vec.create(36, -82.5), rotation: 1 },
                 { idString: "sandbags", position: Vec.create(36, -96.5), rotation: 1 },
 
-                { idString: "grenade_crate", position: Vec.create(27.5, -88.5), rotation: 1 },
+                { idString: "grenade_crate", position: Vec.create(27.5, -88.5) },
 
                 // North-Center of the Bridge
                 { idString: "regular_crate", position: Vec.create(13.5, -55), rotation: 1 },
                 { idString: "barrel", position: Vec.create(4, -51), rotation: 1 },
                 { idString: "gun_case", position: Vec.create(13.5, -47), rotation: 2 },
                 { idString: "sandbags", position: Vec.create(12.5, -40), rotation: 2 },
-                { idString: "aegis_crate", position: Vec.create(14.5, -30.5), rotation: 2 },
+                { idString: "aegis_crate", position: Vec.create(14.5, -30.5) },
 
                 // Center of the Bridge
-                { idString: "humvee", position: Vec.create(-10, -4), rotation: 0 },
-                { idString: "regular_crate", position: Vec.create(5, -20), rotation: 0 },
+                { idString: "m1117_damaged", position: Vec.create(-8.5, -4), rotation: 0 },
+                { idString: "regular_crate", position: Vec.create(7, -20), rotation: 0 },
                 { idString: "gun_case", position: Vec.create(14, 10), rotation: 0 },
 
                 // South-Center of the Bridge
@@ -2432,21 +2542,21 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "barrel", position: Vec.create(15.5, 43.5), rotation: 2 },
                 { idString: "tear_gas_crate", position: Vec.create(15.5, 52.5), rotation: 1 },
 
-                //South End of the Bridge
-                { idString: "barrel", position: Vec.create(-17.5, -80), rotation: 0 },
+                // South End of the Bridge
+                { idString: "barrel", position: Vec.create(17.5, 80), rotation: 0 },
 
-                { idString: "sandbags", position: Vec.create(-25, 80), rotation: 0 },
-                { idString: "sandbags", position: Vec.create(-36, 82.5), rotation: 1 },
-                { idString: "sandbags", position: Vec.create(-36, 96.5), rotation: 1 },
+                { idString: "sandbags", position: Vec.create(-25, 77), rotation: 0 },
+                { idString: "sandbags", position: Vec.create(-36, 79.5), rotation: 1 },
+                { idString: "sandbags", position: Vec.create(-36, 93.5), rotation: 1 },
 
-                { idString: "grenade_crate", position: Vec.create(-27.5, 88.5), rotation: 1 }
+                { idString: "grenade_crate", position: Vec.create(-27.5, 85.5) }
             ],
             lootSpawners: [
 
             ],
             subBuildings: [
                 // North West Shed
-                { idString: "port_shed", position: Vec.create(-36, -95), orientation: 0 },
+                { idString: "port_shed", position: Vec.create(-36, -95) },
                 { idString: "port_shed", position: Vec.create(-36, -95), orientation: 2 }
             ]
         },
@@ -2463,10 +2573,24 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { type: "sand", hitbox: RectangleHitbox.fromRect(65, 65, Vec.create(0, 0)) }
             ],
             obstacles: [
-                { idString: "bunker_entrance", position: Vec.create(-10, -15), rotation: 0 },
-                { idString: "bunker_entrance_door", position: Vec.create(-25, -15), rotation: 0 },
+                { idString: "bunker_entrance", position: Vec.create(-10, -16), rotation: 0 },
 
-                { idString: "forklift", position: Vec.create(-17.5, 12.5), rotation: 0 },
+                { idString: "sandbags", position: Vec.create(18.42, -27.15), rotation: 0 },
+                { idString: "sandbags", position: Vec.create(25.28, -15.7), rotation: 1 },
+                { idString: "flint_crate", position: Vec.create(15, -17) },
+                { idString: "barrel", position: Vec.create(15, -7.5), rotation: 1 },
+                { idString: "super_barrel", position: Vec.create(5, -17), rotation: 1 },
+
+                { idString: "sandbags", position: Vec.create(-5.5, 7.94), rotation: 1 },
+                { idString: "sandbags", position: Vec.create(0.72, 19.15), rotation: 0 },
+                { idString: "cooler", position: Vec.create(2.28, 8.42), rotation: 1 },
+
+                { idString: "box", position: Vec.create(16.66, 9.9), rotation: 0 },
+                { idString: "box", position: Vec.create(13.45, 16.63), rotation: 0 },
+                { idString: "box", position: Vec.create(19.13, 16.54), rotation: 0 },
+
+                { idString: "regular_crate", position: Vec.create(-17.34, 6.54) },
+                { idString: "regular_crate", position: Vec.create(-16.5, 17.85) },
 
                 { idString: "roadblock", position: Vec.create(-26, 0), rotation: 0 },
                 { idString: "roadblock", position: Vec.create(-27, 15), rotation: 0 },
@@ -2474,22 +2598,8 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
                 { idString: "roadblock", position: Vec.create(-12.5, 27.5), rotation: 1 },
                 { idString: "roadblock", position: Vec.create(2.5, 27.5), rotation: 1 },
                 { idString: "roadblock", position: Vec.create(17.5, 27.5), rotation: 1 },
-                { idString: "roadblock", position: Vec.create(25, 15), rotation: 0 },
-
-                { idString: "sandbags", position: Vec.create(25, 0), rotation: 1 },
-                { idString: "sandbags", position: Vec.create(25, -15), rotation: 1 },
-                { idString: "sandbags", position: Vec.create(25, -26), rotation: 0 },
-                { idString: "sandbags", position: Vec.create(10, -26), rotation: 0 },
-                { idString: "flint_crate", position: Vec.create(15, -17), rotation: 1 },
-                { idString: "barrel", position: Vec.create(15, -7.5), rotation: 1 },
-                { idString: "super_barrel", position: Vec.create(5, -17), rotation: 1 },
-
-                { idString: "regular_crate", position: Vec.create(17, 12.5), rotation: 0 },
-                { idString: "box", position: Vec.create(18, 20), rotation: 0 },
-                { idString: "box", position: Vec.create(12.5, 22.5), rotation: 0 }
+                { idString: "roadblock", position: Vec.create(25, 15), rotation: 0 }
             ],
-            lootSpawners: [
-
-            ]
+            lootSpawners: []
         }
     ]);

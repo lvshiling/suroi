@@ -1,12 +1,12 @@
-import { GameConstants, ObjectCategory, ZIndexes } from "../../../../common/src/constants";
+import { ObjectCategory, ZIndexes } from "../../../../common/src/constants";
 import { Numeric } from "../../../../common/src/utils/math";
 import { type ObjectsNetData } from "../../../../common/src/utils/objectsSerializations";
 import { randomFloat, randomPointInsideCircle } from "../../../../common/src/utils/random";
 import { FloorTypes } from "../../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
-import { SuroiSprite, toPixiCoords } from "../utils/pixi";
 import { type GameSound } from "../managers/soundManager";
+import { SuroiSprite, toPixiCoords } from "../utils/pixi";
 import { type Tween } from "../utils/tween";
 import { GameObject } from "./gameObject";
 
@@ -19,7 +19,7 @@ export class Parachute extends GameObject<ObjectCategory.Parachute> {
 
     private fallSound?: GameSound;
 
-    constructor(game: Game, id: number, data: Required<ObjectsNetData[ObjectCategory.Parachute]>) {
+    constructor(game: Game, id: number, data: ObjectsNetData[ObjectCategory.Parachute]) {
         super(game, id);
 
         this.container.addChild(this.image);
@@ -53,7 +53,7 @@ export class Parachute extends GameObject<ObjectCategory.Parachute> {
                     x: scale,
                     y: scale
                 },
-                duration: GameConstants.msPerTick,
+                duration: this.game.serverDt,
                 onComplete: () => {
                     this.scaleAnim = undefined;
                 }

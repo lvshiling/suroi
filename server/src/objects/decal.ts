@@ -26,6 +26,5 @@ export class Decal extends BaseGameObject<ObjectCategory.Decal> {
         return this;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
-    override damage(): void { }
+    override damage(): void { /* can't damage a decal */ }
 }

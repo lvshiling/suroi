@@ -1,15 +1,23 @@
 import { isMobile } from "pixi.js";
+import { GameConstants } from "../../../../../common/src/constants";
 import { type Result, type ResultRes } from "../../../../../common/src/utils/misc";
 import { type Stringable } from "./gameConsole";
 import { Casters, type CVarChangeListener, type CVarFlags, type ConVar, type ExtractConVarValue } from "./variables";
-import { GameConstants } from "../../../../../common/src/constants";
 
+/*
+    eslint-disable
+    @stylistic/indent-binary-ops
+*/
+
+/*
+    `@stylistic/indent-binary-ops`: ESLint sucks at indenting types correctly
+*/
 export interface JSONCVar<Value extends Stringable> {
     readonly value: Value
     readonly flags: Partial<CVarFlags>
 }
 
-//! don't use "uv_" as a prefix, cause that's reserved for custom cvars
+// ! don't use "uv_" as a prefix, cause that's reserved for custom cvars
 
 export const CVarCasters = Object.freeze({
     cv_player_name: Casters.toString,
@@ -41,8 +49,10 @@ export const CVarCasters = Object.freeze({
     cv_renderer: Casters.generateUnionCaster(["webgl1", "webgl2", "webgpu"]),
     cv_renderer_res: Casters.generateUnionCaster(["auto", "0.5", "1", "2", "3"]),
     cv_high_res_textures: Casters.toBoolean,
+    cv_cooler_graphics: Casters.toBoolean,
     cv_blur_splash: Casters.toBoolean,
     cv_minimap_minimized: Casters.toBoolean,
+    cv_map_expanded: Casters.toBoolean,
     cv_leave_warning: Casters.toBoolean,
     cv_ui_scale: Casters.toNumber,
     cv_minimap_transparency: Casters.toNumber,
@@ -54,11 +64,13 @@ export const CVarCasters = Object.freeze({
     cv_console_height: Casters.toNumber,
     cv_console_left: Casters.toNumber,
     cv_console_top: Casters.toNumber,
+    cv_console_open: Casters.toBoolean,
     cv_crosshair_color: Casters.toString,
     cv_crosshair_size: Casters.toNumber,
     cv_crosshair_stroke_color: Casters.toString,
     cv_crosshair_stroke_size: Casters.toNumber,
-    cv_auto_pickup: Casters.toBoolean,
+    cv_autopickup: Casters.toBoolean,
+    cv_autopickup_dual_guns: Casters.toBoolean,
 
     pf_show_fps: Casters.toBoolean,
     pf_show_ping: Casters.toBoolean,
@@ -83,10 +95,27 @@ export type CVarTypeMapping = {
 };
 
 type SimpleCVarMapping = {
-    [K in keyof typeof CVarCasters]: ExtractConVarValue<CVarTypeMapping[K]> | {
-        readonly value: ExtractConVarValue<CVarTypeMapping[K]>
-        readonly changeListeners: CVarChangeListener<ExtractConVarValue<CVarTypeMapping[K]>> | Array<CVarChangeListener<ExtractConVarValue<CVarTypeMapping[K]>>>
-    }
+    [K in keyof typeof CVarCasters]: ExtractConVarValue<CVarTypeMapping[K]> extends infer Val
+        ? Val | (
+            {
+                readonly value: Val
+            } & (
+                {
+                    readonly changeListeners: CVarChangeListener<Val> | Array<CVarChangeListener<Val>>
+                } |
+                {
+                    readonly changeListeners?: never
+                }
+            ) & (
+                {
+                    readonly flags: Partial<CVarFlags>
+                } |
+                {
+                    readonly flags?: never
+                }
+            )
+        )
+        : never
 };
 
 export const defaultClientCVars: SimpleCVarMapping = Object.freeze({
@@ -112,7 +141,7 @@ export const defaultClientCVars: SimpleCVarMapping = Object.freeze({
     cv_region: "",
     cv_camera_shake_fx: true,
     cv_killfeed_style: "text",
-    cv_weapon_slot_style: "simple", // change to "colored"?
+    cv_weapon_slot_style: "colored",
     cv_movement_smoothing: true,
     cv_responsive_rotation: true,
 
@@ -120,14 +149,27 @@ export const defaultClientCVars: SimpleCVarMapping = Object.freeze({
     cv_renderer: "webgl2",
     cv_renderer_res: "auto",
     cv_high_res_textures: true,
+    cv_cooler_graphics: false,
     cv_blur_splash: !isMobile.any, // blur kills splash screen performance on phones from my testing
 
     cv_rules_acknowledged: false,
     cv_hide_rules_button: false,
     cv_leave_warning: true,
     cv_ui_scale: 1,
+    cv_draw_hud: true,
 
-    cv_minimap_minimized: false,
+    cv_map_expanded: {
+        value: false,
+        flags: {
+            archive: false
+        }
+    },
+    cv_minimap_minimized: {
+        value: false,
+        flags: {
+            archive: false
+        }
+    },
     cv_minimap_transparency: 0.8,
     cv_map_transparency: 0.9,
 
@@ -135,16 +177,22 @@ export const defaultClientCVars: SimpleCVarMapping = Object.freeze({
     cv_console_height: window.innerWidth / 2,
     cv_console_left: window.innerWidth / 4,
     cv_console_top: window.innerWidth / 4,
+    cv_console_open: {
+        value: false,
+        flags: {
+            archive: false
+        }
+    },
 
     cv_crosshair_color: "#000000",
     cv_crosshair_size: 1.5,
     cv_crosshair_stroke_color: "#000000",
     cv_crosshair_stroke_size: 0,
 
-    cv_auto_pickup: true,
+    cv_autopickup: true,
+    cv_autopickup_dual_guns: true,
 
     // unused for now
-    cv_draw_hud: true,
     cv_language: "en",
     cv_mute_audio: false,
     //
@@ -165,38 +213,39 @@ export const defaultClientCVars: SimpleCVarMapping = Object.freeze({
     dv_weapon_preset: ""
 } satisfies SimpleCVarMapping);
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-assertions
 export const defaultBinds = Object.freeze({
     "+up": ["W", "ArrowUp"],
     "+down": ["S", "ArrowDown"],
     "+left": ["A", "ArrowLeft"],
     "+right": ["D", "ArrowRight"],
-    interact: ["F"],
-    loot: [],
+    "interact": ["F"],
+    "loot": [],
     "slot 0": ["1"],
     "slot 1": ["2"],
     "slot 2": ["3", "E"],
     "equip_or_cycle_throwables 1": ["4"],
-    last_item: ["Q"],
-    other_weapon: ["Space"],
-    swap_gun_slots: ["T"],
+    "last_item": ["Q"],
+    "other_weapon": ["Space"],
+    "swap_gun_slots": ["T"],
     "cycle_items -1": ["MWheelUp"],
     "cycle_items 1": ["MWheelDown"],
     "+attack": ["Mouse0"],
-    drop: [],
-    reload: ["R"],
+    "drop": [],
+    "reload": ["R"],
     "cycle_scopes -1": [],
     "cycle_scopes 1": [],
     "use_consumable gauze": ["7"],
     "use_consumable medikit": ["8"],
     "use_consumable cola": ["9"],
     "use_consumable tablets": ["0"],
-    cancel_action: ["X"],
+    "cancel_action": ["X"],
     "+view_map": [],
-    toggle_map: ["G", "M"],
-    toggle_minimap: ["N"],
-    toggle_hud: [],
+    "toggle_map": ["G", "M"],
+    "toggle_minimap": ["N"],
+    "toggle_hud": [],
     "+emote_wheel": ["Mouse2"],
     "+map_ping_wheel": ["C"],
-    toggle_console: []
+    "toggle_console": [],
+    "+map_ping": [],
+    "toggle_slot_lock": []
 } as Record<string, string[]>);

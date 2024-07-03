@@ -2,6 +2,7 @@ import { Loots, type LootDefinition } from "../../../common/src/definitions/loot
 import { ColorStyles, styleText } from "../../../common/src/utils/ansiColoring";
 import { type ObjectDefinition, type ReferenceTo } from "../../../common/src/utils/objectDefinitions";
 import { weightedRandom } from "../../../common/src/utils/random";
+import { Config } from "../config";
 import { LootTiers, type WeightedItem } from "../data/lootTables";
 
 export const Logger = {
@@ -22,6 +23,11 @@ function internalLog(...message: string[]): void {
     );
 }
 
+export const dragConst = (aggressiveness: number, base?: number): number => Math.pow(
+    base ?? Math.E,
+    -(aggressiveness + 1 / (1.78734 * Config.tps ** 2.32999)) / Config.tps
+);
+
 export class LootItem {
     constructor(
         public readonly idString: ReferenceTo<LootDefinition>,
@@ -29,21 +35,23 @@ export class LootItem {
     ) {}
 }
 
-export function getLootTableLoot(loots: WeightedItem[]): LootItem[] {
+export function getLootTableLoot(loots: readonly WeightedItem[]): LootItem[] {
     let loot: LootItem[] = [];
 
-    const items: Array<WeightedItem[] | WeightedItem> = [];
+    const items: Array<readonly WeightedItem[] | WeightedItem> = [];
     const weights: number[] = [];
     for (const item of loots) {
         items.push(
             item.spawnSeparately && (item.count ?? 1) > 1
+                // a null-ish value would fail the conditional this branch is contingent on
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                 ? new Array<WeightedItem>(item.count!).fill(item)
                 : item
         );
         weights.push(item.weight);
     }
 
-    const selectedItem = weightedRandom<WeightedItem | WeightedItem[]>(items, weights);
+    const selectedItem = weightedRandom<WeightedItem | readonly WeightedItem[]>(items, weights);
 
     for (const selection of [selectedItem].flat()) {
         if ("tier" in selection) {
@@ -61,14 +69,16 @@ export function getLootTableLoot(loots: WeightedItem[]): LootItem[] {
         }
 
         if ("ammoType" in definition && definition.ammoSpawnAmount) {
-            const ammoSpawnAmount = definition.ammoSpawnAmount;
+            const { ammoType, ammoSpawnAmount } = definition;
+
             if (ammoSpawnAmount > 1) {
+                const halfAmount = ammoSpawnAmount / 2;
                 loot.push(
-                    new LootItem(definition.ammoType, Math.floor(ammoSpawnAmount / 2)),
-                    new LootItem(definition.ammoType, Math.ceil(ammoSpawnAmount / 2))
+                    new LootItem(ammoType, Math.floor(halfAmount)),
+                    new LootItem(ammoType, Math.ceil(halfAmount))
                 );
             } else {
-                loot.push(new LootItem(definition.ammoType, ammoSpawnAmount));
+                loot.push(new LootItem(ammoType, ammoSpawnAmount));
             }
         }
     }

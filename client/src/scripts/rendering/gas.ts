@@ -1,6 +1,6 @@
 import $ from "jquery";
 import { Graphics } from "pixi.js";
-import { GameConstants, GasState, ZIndexes } from "../../../../common/src/constants";
+import { GasState, ZIndexes } from "../../../../common/src/constants";
 import { type UpdatePacket } from "../../../../common/src/packets/updatePacket";
 import { Numeric } from "../../../../common/src/utils/math";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
@@ -22,19 +22,29 @@ export class Gas {
 
     lastUpdateTime = Date.now();
 
-    game: Game;
-
-    private readonly _ui = {
-        msgText: $("#gas-msg-info"),
-        msgContainer: $("#gas-msg"),
-
-        timer: $("#gas-timer"),
-        timerText: $("#gas-timer-text"),
-        timerImg: $("#gas-timer-image")
+    private readonly _ui: {
+        readonly msgText: JQuery<HTMLDivElement>
+        readonly msgContainer: JQuery<HTMLDivElement>
+        readonly timer: JQuery<HTMLDivElement>
+        readonly timerText: JQuery<HTMLSpanElement>
+        readonly timerImg: JQuery<HTMLImageElement>
     };
 
-    constructor(game: Game) {
-        this.game = game;
+    private static _instantiated = false;
+    constructor(readonly game: Game) {
+        if (Gas._instantiated) {
+            throw new Error("Class 'Gas' has already been instantiated");
+        }
+        Gas._instantiated = true;
+
+        this._ui = {
+            msgText: this.game.uiManager.ui.gasMsgInfo,
+            msgContainer: this.game.uiManager.ui.gasMsg,
+
+            timer: $<HTMLDivElement>("#gas-timer"),
+            timerText: $<HTMLSpanElement>("#gas-timer-text"),
+            timerImg: $<HTMLImageElement>("#gas-timer-image")
+        };
     }
 
     updateFrom(data: UpdatePacket): void {
@@ -82,9 +92,9 @@ export class Gas {
             }
 
             if (
-                (isInactive || gas.currentDuration !== 0) &&
-                !UI_DEBUG_MODE &&
-                (!this.game.gameOver || this.game.spectating)
+                (isInactive || gas.currentDuration !== 0)
+                && !UI_DEBUG_MODE
+                && (!this.game.gameOver || this.game.spectating)
             ) {
                 this._ui.msgText.text(gasMessage);
                 this._ui.msgContainer.fadeIn();
@@ -144,11 +154,14 @@ export class GasRender {
             .closePath()
             .fill(COLORS.gas)
             .moveTo(0, 1);
-        for (let i = 1; i < GasRender._segments; i++) {
-            const theta = i / GasRender._segments;
-            const s = Math.sin(2 * Math.PI * theta);
-            const c = Math.cos(2 * Math.PI * theta);
-            this.graphics.lineTo(s, c);
+
+        const tau = 2 * Math.PI;
+        for (let i = 0; i < GasRender._segments; i++) {
+            const interp = i / GasRender._segments;
+            this.graphics.lineTo(
+                Math.sin(tau * interp),
+                Math.cos(tau * interp)
+            );
         }
         this.graphics
             .closePath()
@@ -160,7 +173,7 @@ export class GasRender {
         let radius: number;
 
         if (gas.state === GasState.Advancing) {
-            const interpFactor = Numeric.clamp((Date.now() - gas.lastUpdateTime) / GameConstants.msPerTick, 0, 1);
+            const interpFactor = Numeric.clamp((Date.now() - gas.lastUpdateTime) / gas.game.serverDt, 0, 1);
             position = Vec.lerp(gas.lastPosition, gas.position, interpFactor);
             radius = Numeric.lerp(gas.lastRadius, gas.radius, interpFactor);
         } else {

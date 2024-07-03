@@ -8,7 +8,9 @@ export type GetGameResponse =
     } |
     {
         readonly success: false
-        readonly message?: "warning" | "tempBan" | "permaBan"
+        readonly message?: "warn" | "temp" | "perma"
+        readonly reason?: string
+        readonly reportID?: string
     };
 
 export enum CustomTeamMessages {

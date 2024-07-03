@@ -30,7 +30,7 @@ export class Loot extends GameObject {
 
     animation?: Tween<Vector>;
 
-    constructor(game: Game, id: number, data: Required<ObjectsNetData[ObjectCategory.Loot]>) {
+    constructor(game: Game, id: number, data: ObjectsNetData[ObjectCategory.Loot]) {
         super(game, id);
 
         this.images = {
@@ -112,12 +112,12 @@ export class Loot extends GameObject {
 
             // Play an animation if this is new loot
             if (data.full.isNew && isNew) {
-                this.container.scale.set(0.5);
+                this.container.scale.set(0);
                 this.animation = this.game.addTween({
                     target: this.container.scale,
                     to: { x: 1, y: 1 },
                     duration: 1000,
-                    ease: EaseFunctions.elasticOut,
+                    ease: EaseFunctions.elasticOut2,
                     onComplete: () => {
                         this.animation = undefined;
                     }
@@ -153,18 +153,19 @@ export class Loot extends GameObject {
         if (player.dead || player.downed) return false;
 
         const inventory = this.game.uiManager.inventory;
+        const { weapons, lockedSlots } = inventory;
         const definition = this.definition;
 
         switch (definition.itemType) {
             case ItemType.Gun: {
-                for (const weapon of inventory.weapons) {
+                for (const weapon of weapons) {
                     if (
-                        weapon?.definition.itemType === ItemType.Gun &&
-                        (
-                            definition.idString === weapon.definition.dualVariant ||
-                            (
-                                definition === weapon.definition &&
-                                weapon.definition.dualVariant
+                        weapon?.definition.itemType === ItemType.Gun
+                        && (
+                            definition.idString === weapon.definition.dualVariant
+                            || (
+                                definition === weapon.definition
+                                && weapon.definition.dualVariant
                             )
                         )
                     ) {
@@ -172,19 +173,20 @@ export class Loot extends GameObject {
                     }
                 }
 
-                return !inventory.weapons[0] ||
-                    !inventory.weapons[1] ||
-                    (inventory.activeWeaponIndex < 2 && definition !== inventory.weapons[inventory.activeWeaponIndex]?.definition);
+                const activeWeaponIndex = inventory.activeWeaponIndex;
+                return (!weapons[0] && !(lockedSlots & 0b01))
+                    || (!weapons[1] && !(lockedSlots & 0b10))
+                    || (activeWeaponIndex < 2 && definition !== weapons[activeWeaponIndex]?.definition && !(lockedSlots & (1 << activeWeaponIndex)));
             }
             case ItemType.Melee: {
-                return definition !== inventory.weapons[2]?.definition;
+                return definition !== weapons[2]?.definition && !(lockedSlots & 0b100);
             }
             case ItemType.Healing:
             case ItemType.Ammo:
             case ItemType.Throwable: {
                 const { idString } = definition;
 
-                return inventory.items[idString] + 1 <= player.equipment.backpack.maxCapacity[idString];
+                return !(lockedSlots & 0b1000) && inventory.items[idString] + 1 <= player.equipment.backpack.maxCapacity[idString];
             }
             case ItemType.Armor: {
                 switch (true) {
